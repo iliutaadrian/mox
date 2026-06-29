@@ -1,0 +1,7 @@
+# compiled binary
+/spark-cli
+
+# local data + secrets (never commit)
+*.db
+config.yaml
+.env

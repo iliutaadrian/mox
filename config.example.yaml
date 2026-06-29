@@ -1,0 +1,63 @@
+# spark-cli configuration.
+# Copy to ./config.yaml (in the project folder) and edit.
+
+# OpenAI model used for classification. Default is gpt-4o-mini, which is cheap
+# and ample for this simple, high-volume task. Set gpt-4o for higher accuracy.
+model: gpt-4o-mini
+
+# On a cold mailbox, how many recent messages to pull on the first sync.
+fetch_limit: 200
+
+accounts:
+  - name: Personal
+    imap_host: imap.gmail.com
+    imap_port: 993
+    imap_user: you@gmail.com
+    # For Gmail, use an App Password (not your account password).
+    imap_pass: "your-app-password"
+    mailbox: INBOX
+    # SMTP is only needed for the (later) AI reply-draft feature.
+    smtp_host: smtp.gmail.com
+    smtp_port: 465
+    smtp_user: you@gmail.com
+    smtp_pass: "your-app-password"
+    from: you@gmail.com
+
+  # - name: Work
+  #   imap_host: imap.fastmail.com
+  #   imap_user: you@work.com
+  #   imap_pass: "..."
+
+# The fixed category set. The AI sorts each email into exactly one of these.
+# The description is fed to the model to guide its choice. If an email fits
+# none of them, the AI proposes a new one (shown under "Suggested" — press p
+# to approve it into the set).
+#
+# A category may also carry a `match` block of sender rules. Matching emails are
+# filed there DETERMINISTICALLY, before the AI runs (no token cost). Such a
+# category is shown under "Manual" in the sidebar; AI-only ones under "AI". You
+# can also create rules from inside the app: select emails (space) and press A.
+#   match:
+#     domains:   [github.com]          # also matches subdomains (ci.github.com)
+#     addresses: [alerts@honeybadger.io]  # exact sender address
+categories:
+  - name: GitHub
+    description: Pull requests, issues, mentions, Actions/CI, Dependabot.
+    match:
+      domains: [github.com]
+  - name: Honeybadger
+    description: Error and uptime alerts from Honeybadger.
+    match:
+      domains: [honeybadger.io]
+  - name: Personal
+    description: Real people writing to you directly; friends, family, 1:1 threads.
+  - name: Work
+    description: Job, colleagues, clients, anything employment-related.
+  - name: Notifications
+    description: Automated alerts from other services — calendar, security, app notifications.
+  - name: Newsletters
+    description: Subscriptions, digests, blogs, recurring marketing content.
+  - name: Receipts
+    description: Order confirmations, invoices, payment and shipping notices.
+  - name: Other
+    description: Anything that does not clearly fit the categories above.
