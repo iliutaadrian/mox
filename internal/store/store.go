@@ -183,6 +183,19 @@ ON CONFLICT(account, mailbox, uid) DO NOTHING`,
 	return n > 0, nil
 }
 
+// CountMessages returns how many messages are stored for an account+mailbox.
+func (s *Store) CountMessages(account, mailbox string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE account=? AND mailbox=?`, account, mailbox).Scan(&n)
+	return n, err
+}
+
+// SetSeen updates the local read/unread flag for a message.
+func (s *Store) SetSeen(id int64, seen bool) error {
+	_, err := s.db.Exec(`UPDATE messages SET seen=? WHERE id=?`, boolToInt(seen), id)
+	return err
+}
+
 // Unclassified returns up to limit messages with no AI category yet, newest first.
 func (s *Store) Unclassified(limit int) ([]Message, error) {
 	rows, err := s.db.Query(`

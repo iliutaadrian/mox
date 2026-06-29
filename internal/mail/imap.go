@@ -25,9 +25,13 @@ import (
 	"github.com/iliutaadrian/spark-cli/internal/store"
 )
 
-// Sync connects to one account, fetches messages newer than what's stored, and
-// inserts them. Returns how many new messages were inserted.
-func Sync(st *store.Store, acc config.Account, fetchLimit int) (int, error) {
+// fetchChunk caps how many messages are pulled per FETCH command, so a large
+// backfill arrives in steady batches (gentler on throttling servers like Yahoo).
+const fetchChunk = 200
+
+// dial opens a TLS connection, logs in and sends the IMAP ID. The caller is
+// responsible for Close()/Logout(). Set SPARK_IMAP_DEBUG to dump the protocol.
+func dial(acc config.Account) (*imapclient.Client, error) {
 	addr := fmt.Sprintf("%s:%d", acc.IMAPHost, acc.IMAPPort)
 	var dialOpts *imapclient.Options
 	if os.Getenv("SPARK_IMAP_DEBUG") != "" {
@@ -35,25 +39,34 @@ func Sync(st *store.Store, acc config.Account, fetchLimit int) (int, error) {
 	}
 	c, err := imapclient.DialTLS(addr, dialOpts)
 	if err != nil {
-		return 0, fmt.Errorf("%s: dial: %w", acc.Name, err)
+		return nil, fmt.Errorf("%s: dial: %w", acc.Name, err)
+	}
+	if err := c.Login(acc.IMAPUser, acc.IMAPPass).Wait(); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("%s: login: %w", acc.Name, err)
+	}
+	// Yahoo (and AOL) drop the connection on the next command unless the client
+	// first identifies itself with an IMAP ID (RFC 2971). Best-effort.
+	c.ID(&imap.IDData{Name: "spark-cli", Version: "1.0"}).Wait()
+	return c, nil
+}
+
+// Sync pulls mail for one account into the store and returns how many new
+// messages were inserted. It keeps the newest fetchLimit messages locally:
+//   - forward: any mail newer than what we have (new arrivals), then
+//   - backfill: progressively older mail until the local count reaches
+//     fetchLimit — so raising fetchLimit and re-running grows the corpus
+//     deeper into history WITHOUT wiping the database.
+// Strictly read-only: the mailbox is opened with EXAMINE and bodies fetched
+// with BODY.PEEK, so nothing on the server changes.
+func Sync(st *store.Store, acc config.Account, fetchLimit int) (int, error) {
+	c, err := dial(acc)
+	if err != nil {
+		return 0, err
 	}
 	defer c.Close()
-
-	if err := c.Login(acc.IMAPUser, acc.IMAPPass).Wait(); err != nil {
-		return 0, fmt.Errorf("%s: login: %w", acc.Name, err)
-	}
-	// NOTE: must be a closure. `defer c.Logout().Wait()` would evaluate the
-	// receiver c.Logout() immediately — sending LOGOUT right after login and
-	// killing the connection before SELECT runs.
 	defer func() { c.Logout().Wait() }()
 
-	// Yahoo (and AOL) silently drop the connection on the next command unless the
-	// client first identifies itself with an IMAP ID (RFC 2971). Best-effort:
-	// servers without the ID extension just reject it, which is harmless here.
-	c.ID(&imap.IDData{Name: "spark-cli", Version: "1.0"}).Wait()
-
-	// ReadOnly issues EXAMINE, not SELECT — the server refuses any flag change,
-	// so fetching can never mark messages as \Seen (read).
 	sel, err := c.Select(acc.Mailbox, &imap.SelectOptions{ReadOnly: true}).Wait()
 	if err != nil {
 		return 0, fmt.Errorf("%s: select %s: %w", acc.Name, acc.Mailbox, err)
@@ -63,9 +76,7 @@ func Sync(st *store.Store, acc config.Account, fetchLimit int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-
-	// If UIDVALIDITY changed, the server's UIDs are no longer comparable to
-	// ours — wipe and re-sync from scratch.
+	// If UIDVALIDITY changed, the server's UIDs are no longer comparable — reset.
 	if storedValidity != 0 && storedValidity != sel.UIDValidity {
 		if err := st.ResetMailbox(acc.Name, acc.Mailbox); err != nil {
 			return 0, err
@@ -73,39 +84,54 @@ func Sync(st *store.Store, acc config.Account, fetchLimit int) (int, error) {
 		lastUID = 0
 	}
 
-	numSet, fetchKind, err := buildFetchSet(sel, lastUID, fetchLimit)
-	if err != nil {
-		return 0, err
-	}
-	if numSet == nil {
-		// Nothing new.
-		return 0, st.SetSyncState(acc.Name, acc.Mailbox, sel.UIDValidity, lastUID)
-	}
-
-	opts := &imap.FetchOptions{
-		UID:         true,
-		Envelope:    true,
-		Flags:       true,
-		BodySection: []*imap.FetchItemBodySection{{Peek: true}}, // BODY.PEEK[] — never sets \Seen
-	}
-	buffers, err := c.Fetch(numSet, opts).Collect()
-	if err != nil {
-		return 0, fmt.Errorf("%s: fetch (%s): %w", acc.Name, fetchKind, err)
-	}
-
 	inserted := 0
 	maxUID := lastUID
-	for _, b := range buffers {
-		m := bufferToMessage(acc, b)
-		if uint32(b.UID) > maxUID {
-			maxUID = uint32(b.UID)
+
+	// 1) Forward: new arrivals with UID above what we've already seen.
+	if lastUID > 0 {
+		set := imap.UIDSet{}
+		set.AddRange(imap.UID(lastUID+1), 0) // 0 == "*"
+		n, mx, err := fetchInsert(c, acc, st, set)
+		if err != nil {
+			return inserted, fmt.Errorf("%s: fetch (forward): %w", acc.Name, err)
 		}
-		ok, err := st.InsertMessage(m)
+		inserted += n
+		if mx > maxUID {
+			maxUID = mx
+		}
+	}
+
+	// 2) Backfill: pull older messages (by sequence) in chunks until we hold
+	//    the newest fetchLimit, or the mailbox is exhausted.
+	for {
+		have, err := st.CountMessages(acc.Name, acc.Mailbox)
 		if err != nil {
 			return inserted, err
 		}
-		if ok {
-			inserted++
+		if have >= fetchLimit || uint32(have) >= sel.NumMessages {
+			break
+		}
+		topOlder := sel.NumMessages - uint32(have) // seq of newest not-yet-stored
+		want := fetchLimit - have
+		if want > fetchChunk {
+			want = fetchChunk
+		}
+		start := uint32(1)
+		if topOlder > uint32(want) {
+			start = topOlder - uint32(want) + 1
+		}
+		set := imap.SeqSet{}
+		set.AddRange(start, topOlder)
+		n, mx, err := fetchInsert(c, acc, st, set)
+		if err != nil {
+			return inserted, fmt.Errorf("%s: fetch (backfill): %w", acc.Name, err)
+		}
+		inserted += n
+		if mx > maxUID {
+			maxUID = mx
+		}
+		if n == 0 {
+			break // safety: nothing new came back, avoid an infinite loop
 		}
 	}
 
@@ -115,26 +141,67 @@ func Sync(st *store.Store, acc config.Account, fetchLimit int) (int, error) {
 	return inserted, nil
 }
 
-// buildFetchSet decides which messages to pull. Cold mailbox (lastUID==0):
-// the most recent fetchLimit messages by sequence number. Warm: UIDs above
-// lastUID. Returns (nil, ...) when there is nothing to fetch.
-func buildFetchSet(sel *imap.SelectData, lastUID uint32, fetchLimit int) (imap.NumSet, string, error) {
-	if sel.NumMessages == 0 {
-		return nil, "", nil
+// fetchInsert fetches a message set (read-only, BODY.PEEK) and inserts new rows.
+// Returns the number inserted and the highest UID seen.
+func fetchInsert(c *imapclient.Client, acc config.Account, st *store.Store, set imap.NumSet) (inserted int, maxUID uint32, err error) {
+	opts := &imap.FetchOptions{
+		UID:         true,
+		Envelope:    true,
+		Flags:       true,
+		BodySection: []*imap.FetchItemBodySection{{Peek: true}}, // never sets \Seen
 	}
-	if lastUID == 0 {
-		limit := uint32(fetchLimit)
-		start := uint32(1)
-		if sel.NumMessages > limit {
-			start = sel.NumMessages - limit + 1
+	buffers, err := c.Fetch(set, opts).Collect()
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, b := range buffers {
+		m := bufferToMessage(acc, b)
+		if uint32(b.UID) > maxUID {
+			maxUID = uint32(b.UID)
 		}
-		set := imap.SeqSet{}
-		set.AddRange(start, sel.NumMessages)
-		return set, "cold", nil
+		ok, err := st.InsertMessage(m)
+		if err != nil {
+			return inserted, maxUID, err
+		}
+		if ok {
+			inserted++
+		}
+	}
+	return inserted, maxUID, nil
+}
+
+// SetSeen marks the given UIDs read or unread ON THE SERVER for one account.
+// This is the ONLY operation in spark-cli that writes to the mail server — it
+// opens the mailbox read-write (SELECT) and issues a STORE of the \Seen flag.
+// Everything else stays read-only.
+func SetSeen(acc config.Account, uids []uint32, seen bool) error {
+	if len(uids) == 0 {
+		return nil
+	}
+	c, err := dial(acc)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	defer func() { c.Logout().Wait() }()
+
+	// Read-write SELECT (not EXAMINE) so the server accepts the flag change.
+	if _, err := c.Select(acc.Mailbox, nil).Wait(); err != nil {
+		return fmt.Errorf("%s: select %s: %w", acc.Name, acc.Mailbox, err)
 	}
 	set := imap.UIDSet{}
-	set.AddRange(imap.UID(lastUID+1), 0) // 0 == "*" (open-ended)
-	return set, "incremental", nil
+	for _, u := range uids {
+		set.AddNum(imap.UID(u))
+	}
+	op := imap.StoreFlagsAdd
+	if !seen {
+		op = imap.StoreFlagsDel
+	}
+	flags := &imap.StoreFlags{Op: op, Silent: true, Flags: []imap.Flag{imap.FlagSeen}}
+	if err := c.Store(set, flags, nil).Close(); err != nil {
+		return fmt.Errorf("%s: store \\Seen: %w", acc.Name, err)
+	}
+	return nil
 }
 
 func bufferToMessage(acc config.Account, b *imapclient.FetchMessageBuffer) *store.Message {

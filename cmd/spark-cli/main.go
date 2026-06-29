@@ -13,6 +13,7 @@ import (
 
 	"github.com/iliutaadrian/spark-cli/internal/ai"
 	"github.com/iliutaadrian/spark-cli/internal/config"
+	"github.com/iliutaadrian/spark-cli/internal/mail"
 	"github.com/iliutaadrian/spark-cli/internal/store"
 	"github.com/iliutaadrian/spark-cli/internal/tui"
 )
@@ -28,6 +29,7 @@ func run() error {
 	defaultCfg, _ := config.DefaultPath()
 	cfgPath := flag.String("config", defaultCfg, "path to config.yaml")
 	dbPath := flag.String("db", "", "path to local SQLite db (default: alongside config)")
+	fetchOnly := flag.Bool("fetch", false, "fetch + store new mail only (no AI classification), then exit")
 	flag.Parse()
 
 	// Load secrets from a .env file alongside the config (e.g. OPENAI_API_KEY).
@@ -52,6 +54,24 @@ func run() error {
 		return err
 	}
 	defer st.Close()
+
+	// Fetch-only: pull + store new mail for every account, no AI classification,
+	// then exit. Per-account so one failure (e.g. a throttled server) doesn't
+	// abort the rest. Lets the messages be analysed before spending on the AI.
+	if *fetchOnly {
+		total := 0
+		for _, acc := range cfg.Accounts {
+			n, err := mail.Sync(st, acc, cfg.FetchLimit)
+			total += n
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  %-10s error: %v (stored %d)\n", acc.Name, err, n)
+				continue
+			}
+			fmt.Printf("  %-10s stored %d\n", acc.Name, n)
+		}
+		fmt.Printf("done — %d new messages stored (not classified)\n", total)
+		return nil
+	}
 
 	// API key resolves from OPENAI_API_KEY when passed empty.
 	cls := ai.New(os.Getenv("OPENAI_API_KEY"), cfg.Model)
