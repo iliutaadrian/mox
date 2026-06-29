@@ -61,7 +61,7 @@ func run() error {
 	if *fetchOnly {
 		total := 0
 		for _, acc := range cfg.Accounts {
-			n, err := mail.Sync(st, acc, cfg.FetchLimit)
+			n, err := mail.Sync(st, acc, cfg.FetchLimit, cfg.FetchSinceDays)
 			total += n
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  %-10s error: %v (stored %d)\n", acc.Name, err, n)

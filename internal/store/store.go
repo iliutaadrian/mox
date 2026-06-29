@@ -6,12 +6,21 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+// Attachment is metadata about one email attachment (the file itself is NOT
+// stored — fetch it on demand from the server if needed).
+type Attachment struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Size int    `json:"size"`
+}
 
 // SuggestedPseudoCategory is the bucket shown in the UI for messages whose AI
 // classification proposed a brand-new category that the user hasn't approved
@@ -33,9 +42,10 @@ type Message struct {
 	Subject   string
 	Date      time.Time
 	Snippet   string
-	Body      string // plain-text rendering (for reading pane + AI)
-	HTML      string // full original HTML part, if any (for browser view)
-	Seen      bool
+	Body        string       // plain-text rendering (for reading pane + AI)
+	HTML        string       // full original HTML part, if any (for browser view)
+	Attachments []Attachment // metadata only (filename/type/size)
+	Seen        bool
 
 	// Local-only AI fields.
 	Category     string // "" = unclassified
@@ -91,6 +101,7 @@ CREATE TABLE IF NOT EXISTS messages (
     snippet       TEXT,
     body          TEXT,
     html          TEXT,
+    attachments   TEXT,
     seen          INTEGER NOT NULL DEFAULT 0,
     category      TEXT,
     confidence    TEXT,
@@ -123,6 +134,7 @@ CREATE TABLE IF NOT EXISTS approved_categories (
 	// the column already exists, which is fine to ignore.
 	s.db.Exec(`ALTER TABLE messages ADD COLUMN source TEXT`)
 	s.db.Exec(`ALTER TABLE messages ADD COLUMN html TEXT`)
+	s.db.Exec(`ALTER TABLE messages ADD COLUMN attachments TEXT`)
 	return nil
 }
 
@@ -170,12 +182,18 @@ func (s *Store) ResetMailbox(account, mailbox string) error {
 // InsertMessage inserts a fetched message. Existing (account,mailbox,uid) rows
 // are left untouched so AI fields survive re-fetches. Returns true if inserted.
 func (s *Store) InsertMessage(m *Message) (bool, error) {
+	atts := ""
+	if len(m.Attachments) > 0 {
+		if b, err := json.Marshal(m.Attachments); err == nil {
+			atts = string(b)
+		}
+	}
 	res, err := s.db.Exec(`
-INSERT INTO messages(account, mailbox, uid, message_id, from_addr, from_name, subject, date, snippet, body, html, seen)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO messages(account, mailbox, uid, message_id, from_addr, from_name, subject, date, snippet, body, html, attachments, seen)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(account, mailbox, uid) DO NOTHING`,
 		m.Account, m.Mailbox, int64(m.UID), m.MessageID, m.FromAddr, m.FromName,
-		m.Subject, m.Date.Unix(), m.Snippet, m.Body, m.HTML, boolToInt(m.Seen))
+		m.Subject, m.Date.Unix(), m.Snippet, m.Body, m.HTML, atts, boolToInt(m.Seen))
 	if err != nil {
 		return false, err
 	}
@@ -188,6 +206,25 @@ func (s *Store) CountMessages(account, mailbox string) (int, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE account=? AND mailbox=?`, account, mailbox).Scan(&n)
 	return n, err
+}
+
+// StoredUIDs returns the set of UIDs already stored for an account+mailbox, so a
+// date-windowed sync can skip what it already has (resumable, no re-download).
+func (s *Store) StoredUIDs(account, mailbox string) (map[uint32]bool, error) {
+	rows, err := s.db.Query(`SELECT uid FROM messages WHERE account=? AND mailbox=?`, account, mailbox)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uint32]bool{}
+	for rows.Next() {
+		var u int64
+		if err := rows.Scan(&u); err != nil {
+			return nil, err
+		}
+		out[uint32(u)] = true
+	}
+	return out, rows.Err()
 }
 
 // SetSeen updates the local read/unread flag for a message.
@@ -257,7 +294,7 @@ func (s *Store) SetCategoryManual(ids []int64, category string) error {
 // All returns every message, newest first.
 func (s *Store) All() ([]Message, error) {
 	rows, err := s.db.Query(`
-SELECT id, account, mailbox, uid, message_id, from_addr, from_name, subject, date, snippet, body, COALESCE(html,''), seen,
+SELECT id, account, mailbox, uid, message_id, from_addr, from_name, subject, date, snippet, body, COALESCE(html,''), COALESCE(attachments,''), seen,
        COALESCE(category,''), COALESCE(confidence,''), COALESCE(suggested_new,''), COALESCE(source,''), COALESCE(classified_at,0)
 FROM messages ORDER BY date DESC`)
 	if err != nil {
@@ -269,10 +306,14 @@ FROM messages ORDER BY date DESC`)
 		var m Message
 		var date, classified int64
 		var seen int
+		var atts string
 		if err := rows.Scan(&m.ID, &m.Account, &m.Mailbox, &m.UID, &m.MessageID,
-			&m.FromAddr, &m.FromName, &m.Subject, &date, &m.Snippet, &m.Body, &m.HTML, &seen,
+			&m.FromAddr, &m.FromName, &m.Subject, &date, &m.Snippet, &m.Body, &m.HTML, &atts, &seen,
 			&m.Category, &m.Confidence, &m.SuggestedNew, &m.Source, &classified); err != nil {
 			return nil, err
+		}
+		if atts != "" {
+			json.Unmarshal([]byte(atts), &m.Attachments)
 		}
 		m.Date = time.Unix(date, 0)
 		m.Seen = seen != 0

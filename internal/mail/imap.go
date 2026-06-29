@@ -52,14 +52,16 @@ func dial(acc config.Account) (*imapclient.Client, error) {
 }
 
 // Sync pulls mail for one account into the store and returns how many new
-// messages were inserted. It keeps the newest fetchLimit messages locally:
-//   - forward: any mail newer than what we have (new arrivals), then
-//   - backfill: progressively older mail until the local count reaches
-//     fetchLimit — so raising fetchLimit and re-running grows the corpus
-//     deeper into history WITHOUT wiping the database.
-// Strictly read-only: the mailbox is opened with EXAMINE and bodies fetched
-// with BODY.PEEK, so nothing on the server changes.
-func Sync(st *store.Store, acc config.Account, fetchLimit int) (int, error) {
+// messages were inserted. New arrivals are always pulled (forward). For the
+// rest it either:
+//   - date-windowed (fetchSinceDays > 0): every message received within the
+//     window, fetching only UIDs not already stored (resumable, no re-download), or
+//   - count-based (otherwise): progressively older mail until the local count
+//     reaches fetchLimit.
+// Either way, raising the limit/window and re-running grows the corpus WITHOUT
+// wiping the database. Strictly read-only: EXAMINE + BODY.PEEK, nothing on the
+// server changes.
+func Sync(st *store.Store, acc config.Account, fetchLimit, fetchSinceDays int) (int, error) {
 	c, err := dial(acc)
 	if err != nil {
 		return 0, err
@@ -101,37 +103,75 @@ func Sync(st *store.Store, acc config.Account, fetchLimit int) (int, error) {
 		}
 	}
 
-	// 2) Backfill: pull older messages (by sequence) in chunks until we hold
-	//    the newest fetchLimit, or the mailbox is exhausted.
-	for {
-		have, err := st.CountMessages(acc.Name, acc.Mailbox)
+	// 2) Fill the rest of the window/limit.
+	if fetchSinceDays > 0 {
+		// Date-windowed: fetch every message since the cutoff that we don't have.
+		since := time.Now().AddDate(0, 0, -fetchSinceDays)
+		data, err := c.UIDSearch(&imap.SearchCriteria{Since: since}, nil).Wait()
+		if err != nil {
+			return inserted, fmt.Errorf("%s: search since: %w", acc.Name, err)
+		}
+		stored, err := st.StoredUIDs(acc.Name, acc.Mailbox)
 		if err != nil {
 			return inserted, err
 		}
-		if have >= fetchLimit || uint32(have) >= sel.NumMessages {
-			break
+		var missing []imap.UID
+		for _, u := range data.AllUIDs() {
+			if !stored[uint32(u)] {
+				missing = append(missing, u)
+			}
 		}
-		topOlder := sel.NumMessages - uint32(have) // seq of newest not-yet-stored
-		want := fetchLimit - have
-		if want > fetchChunk {
-			want = fetchChunk
+		for i := 0; i < len(missing); i += fetchChunk {
+			end := i + fetchChunk
+			if end > len(missing) {
+				end = len(missing)
+			}
+			set := imap.UIDSet{}
+			for _, u := range missing[i:end] {
+				set.AddNum(u)
+			}
+			n, mx, err := fetchInsert(c, acc, st, set)
+			if err != nil {
+				return inserted, fmt.Errorf("%s: fetch (window): %w", acc.Name, err)
+			}
+			inserted += n
+			if mx > maxUID {
+				maxUID = mx
+			}
 		}
-		start := uint32(1)
-		if topOlder > uint32(want) {
-			start = topOlder - uint32(want) + 1
-		}
-		set := imap.SeqSet{}
-		set.AddRange(start, topOlder)
-		n, mx, err := fetchInsert(c, acc, st, set)
-		if err != nil {
-			return inserted, fmt.Errorf("%s: fetch (backfill): %w", acc.Name, err)
-		}
-		inserted += n
-		if mx > maxUID {
-			maxUID = mx
-		}
-		if n == 0 {
-			break // safety: nothing new came back, avoid an infinite loop
+	} else {
+		// Count-based: pull older messages (by sequence) in chunks until we hold
+		// the newest fetchLimit, or the mailbox is exhausted.
+		for {
+			have, err := st.CountMessages(acc.Name, acc.Mailbox)
+			if err != nil {
+				return inserted, err
+			}
+			if have >= fetchLimit || uint32(have) >= sel.NumMessages {
+				break
+			}
+			topOlder := sel.NumMessages - uint32(have) // seq of newest not-yet-stored
+			want := fetchLimit - have
+			if want > fetchChunk {
+				want = fetchChunk
+			}
+			start := uint32(1)
+			if topOlder > uint32(want) {
+				start = topOlder - uint32(want) + 1
+			}
+			set := imap.SeqSet{}
+			set.AddRange(start, topOlder)
+			n, mx, err := fetchInsert(c, acc, st, set)
+			if err != nil {
+				return inserted, fmt.Errorf("%s: fetch (backfill): %w", acc.Name, err)
+			}
+			inserted += n
+			if mx > maxUID {
+				maxUID = mx
+			}
+			if n == 0 {
+				break // safety: nothing new came back, avoid an infinite loop
+			}
 		}
 	}
 
@@ -231,9 +271,10 @@ func bufferToMessage(acc config.Account, b *imapclient.FetchMessageBuffer) *stor
 
 	raw := firstBody(b)
 	if raw != nil {
-		text, html := extractText(raw)
+		text, html, atts := extractText(raw)
 		m.Body = text
 		m.HTML = html
+		m.Attachments = atts
 		m.Snippet = snippet(text, 200)
 	}
 	return m
@@ -253,10 +294,10 @@ func firstBody(b *imapclient.FetchMessageBuffer) []byte {
 // RFC822 message. text prefers text/plain, falling back to HTML rendered to
 // text. html is the raw text/html part (empty if none) — kept for the browser
 // view.
-func extractText(raw []byte) (text, html string) {
+func extractText(raw []byte) (text, html string, atts []store.Attachment) {
 	mr, err := mail.CreateReader(bytes.NewReader(raw))
 	if err != nil {
-		return string(raw), ""
+		return string(raw), "", nil
 	}
 	var plain string
 	for {
@@ -267,17 +308,26 @@ func extractText(raw []byte) (text, html string) {
 		if err != nil {
 			break
 		}
-		ih, ok := p.Header.(*mail.InlineHeader)
-		if !ok {
-			continue
-		}
-		ct, _, _ := ih.ContentType()
-		body, _ := io.ReadAll(p.Body)
-		switch {
-		case strings.HasPrefix(ct, "text/plain") && plain == "":
-			plain = string(body)
-		case strings.HasPrefix(ct, "text/html") && html == "":
-			html = string(body)
+		switch h := p.Header.(type) {
+		case *mail.InlineHeader:
+			ct, _, _ := h.ContentType()
+			body, _ := io.ReadAll(p.Body)
+			switch {
+			case strings.HasPrefix(ct, "text/plain") && plain == "":
+				plain = string(body)
+			case strings.HasPrefix(ct, "text/html") && html == "":
+				html = string(body)
+			}
+		case *mail.AttachmentHeader:
+			// Metadata only — the file itself is not stored. Count bytes without
+			// holding them in memory.
+			name, _ := h.Filename()
+			ct, _, _ := h.ContentType()
+			n, _ := io.Copy(io.Discard, p.Body)
+			if name == "" {
+				name = ct
+			}
+			atts = append(atts, store.Attachment{Name: name, Type: ct, Size: int(n)})
 		}
 	}
 	switch {
@@ -286,7 +336,7 @@ func extractText(raw []byte) (text, html string) {
 	case html != "":
 		text = htmlToText(html)
 	}
-	return text, html
+	return text, html, atts
 }
 
 var (

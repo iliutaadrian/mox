@@ -106,8 +106,12 @@ type Config struct {
 	Model string `yaml:"model"`
 
 	// FetchLimit caps how many recent messages to pull on a cold mailbox
-	// (first sync). Defaults to 200.
+	// (first sync). Defaults to 200. Ignored when FetchSinceDays > 0.
 	FetchLimit int `yaml:"fetch_limit"`
+
+	// FetchSinceDays, when > 0, fetches all messages received within this many
+	// days (e.g. 730 = last 2 years) instead of using FetchLimit.
+	FetchSinceDays int `yaml:"fetch_since_days"`
 }
 
 // DefaultPath returns the config path. For now it lives in the current working

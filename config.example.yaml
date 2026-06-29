@@ -5,8 +5,14 @@
 # and ample for this simple, high-volume task. Set gpt-4o for higher accuracy.
 model: gpt-4o-mini
 
-# On a cold mailbox, how many recent messages to pull on the first sync.
+# On a cold mailbox, how many recent messages to pull per account. Ignored when
+# fetch_since_days is set.
 fetch_limit: 200
+
+# When > 0, fetch every message received within this many days instead of using
+# fetch_limit (e.g. 730 = last 2 years). Attachment metadata (name/type/size) is
+# stored too; the files themselves are not — fetch them on demand.
+# fetch_since_days: 730
 
 accounts:
   - name: Personal

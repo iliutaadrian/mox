@@ -31,7 +31,7 @@ func Categories(st *store.Store, cfg *config.Config) ([]config.Category, error) 
 func Sync(st *store.Store, cfg *config.Config) (int, error) {
 	total := 0
 	for _, acc := range cfg.Accounts {
-		n, err := mail.Sync(st, acc, cfg.FetchLimit)
+		n, err := mail.Sync(st, acc, cfg.FetchLimit, cfg.FetchSinceDays)
 		if err != nil {
 			return total, err
 		}

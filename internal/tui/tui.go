@@ -360,6 +360,9 @@ func (m *model) syncViewport() {
 	if strings.TrimSpace(msg.HTML) != "" {
 		fmt.Fprintf(&b, "%s\n", dimStyle.Render("HTML email — press v to open it in your browser"))
 	}
+	for _, a := range msg.Attachments {
+		fmt.Fprintf(&b, "📎 %s  %s  %s\n", a.Name, a.Type, humanSize(a.Size))
+	}
 	b.WriteString(strings.Repeat("─", max(10, m.vp.Width)) + "\n\n")
 	body := msg.Body
 	if body == "" {
@@ -925,6 +928,18 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// humanSize formats a byte count as a short human-readable string.
+func humanSize(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.0f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
 
 // oneLine flattens a string to a single line by turning newlines, carriage
