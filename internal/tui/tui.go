@@ -28,6 +28,7 @@ import (
 	"github.com/iliutaadrian/spark-cli/internal/ai"
 	"github.com/iliutaadrian/spark-cli/internal/config"
 	"github.com/iliutaadrian/spark-cli/internal/engine"
+	"github.com/iliutaadrian/spark-cli/internal/mail"
 	"github.com/iliutaadrian/spark-cli/internal/store"
 )
 
@@ -90,6 +91,12 @@ type refreshDoneMsg struct {
 	newMail    int
 	classified int
 	err        error
+}
+
+type markDoneMsg struct {
+	n    int
+	seen bool
+	err  error
 }
 
 type model struct {
@@ -383,6 +390,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reload()
 		return m, nil
 
+	case markDoneMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.status = "mark error: " + msg.err.Error()
+		} else {
+			state := "read"
+			if !msg.seen {
+				state = "unread"
+			}
+			m.status = fmt.Sprintf("Marked %d %s on server", msg.n, state)
+		}
+		m.selected = map[int64]bool{}
+		m.reload()
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.pmode != pickerNone {
 			return m.handlePicker(msg)
@@ -425,6 +447,18 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.promote()
 	case "v": // open the full HTML email in the default browser
 		m.openInBrowser()
+	case "M": // mark targets READ on the server (writes to server)
+		if len(m.targetIDs()) > 0 && !m.busy {
+			m.busy = true
+			m.status = "Marking read on server…"
+			return m, m.markSeenCmd(true)
+		}
+	case "U": // mark targets UNREAD on the server (writes to server)
+		if len(m.targetIDs()) > 0 && !m.busy {
+			m.busy = true
+			m.status = "Marking unread on server…"
+			return m, m.markSeenCmd(false)
+		}
 	case "R": // AI re-categorize the targets
 		ids := m.targetIDs()
 		if len(ids) > 0 && !m.busy {
@@ -632,6 +666,47 @@ func (m *model) refreshCmd() tea.Cmd {
 	}
 }
 
+// markSeenCmd marks the target messages read/unread on the server, grouped by
+// account into one connection each, and mirrors the flag locally. This writes
+// to the mail server (the only action that does).
+func (m *model) markSeenCmd(seen bool) tea.Cmd {
+	ids := m.targetIDs()
+	msgByID := make(map[int64]store.Message, len(m.msgs))
+	for _, mm := range m.msgs {
+		msgByID[mm.ID] = mm
+	}
+	accByName := make(map[string]config.Account, len(m.cfg.Accounts))
+	for _, a := range m.cfg.Accounts {
+		accByName[a.Name] = a
+	}
+	st := m.st
+	return func() tea.Msg {
+		uidsByAcc := map[string][]uint32{}
+		idsByAcc := map[string][]int64{}
+		for _, id := range ids {
+			mm, ok := msgByID[id]
+			if !ok {
+				continue
+			}
+			uidsByAcc[mm.Account] = append(uidsByAcc[mm.Account], mm.UID)
+			idsByAcc[mm.Account] = append(idsByAcc[mm.Account], id)
+		}
+		for accName, uids := range uidsByAcc {
+			acc, ok := accByName[accName]
+			if !ok {
+				continue
+			}
+			if err := mail.SetSeen(acc, uids, seen); err != nil {
+				return markDoneMsg{err: err}
+			}
+			for _, id := range idsByAcc[accName] {
+				_ = st.SetSeen(id, seen)
+			}
+		}
+		return markDoneMsg{n: len(ids), seen: seen}
+	}
+}
+
 func (m *model) reclassifyCmd(ids []int64) tea.Cmd {
 	return func() tea.Msg {
 		n, err := engine.Reclassify(context.Background(), m.st, m.cfg, m.cls, ids)
@@ -706,7 +781,7 @@ func (m *model) View() string {
 	if len(m.selected) > 0 {
 		sel = fmt.Sprintf(" · %d selected", len(m.selected))
 	}
-	hint := "r refresh · space select · R re-categorize · m move · A make rule · v html · p approve · tab pane · q quit" + sel
+	hint := "r refresh · space select · R recat · m move · A rule · v html · M/U read/unread · p approve · q quit" + sel
 	footer := footerStyle.Render(truncPlain(hint, m.width))
 	return header + "\n" + body + "\n" + footer
 }
