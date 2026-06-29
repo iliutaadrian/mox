@@ -41,23 +41,65 @@ accounts:
 #     domains:   [github.com]          # also matches subdomains (ci.github.com)
 #     addresses: [alerts@honeybadger.io]  # exact sender address
 categories:
+  - name: Alerts
+    description: Error, uptime, and incident alerts from monitoring/infra services.
+    match:
+      domains: [honeybadger.io, opsgenie.com, render.com, digitaldefense.com]
+  - name: Finance
+    description: Brokerage, banking, crypto, and tax statements and notices.
+    match:
+      domains:
+        [
+          interactivebrokers.com,
+          ing.ro,
+          revolut.com,
+          etoro.com,
+          binance.com,
+          bitgo.com,
+          anaf.ro,
+        ]
   - name: GitHub
     description: Pull requests, issues, mentions, Actions/CI, Dependabot.
     match:
       domains: [github.com]
-  - name: Honeybadger
-    description: Error and uptime alerts from Honeybadger.
+  - name: Shopping
+    description: Order confirmations, shipping, and delivery from online stores/couriers.
     match:
-      domains: [honeybadger.io]
-  - name: Personal
-    description: Real people writing to you directly; friends, family, 1:1 threads.
+      domains:
+        [
+          emag.ro,
+          fashiondays.ro,
+          vinted.com,
+          sameday.ro,
+          fancourier.ro,
+          bman.ro,
+          cloudcart.com,
+        ]
   - name: Work
     description: Job, colleagues, clients, anything employment-related.
+    match:
+      domains: [golfgenius.com, golfgenius.atlassian.net, slack.com]
+  - name: Travel
+    description: Flights, hotels, and trip bookings.
+    match:
+      domains: [booking.com, kiwi.com, ryanairemail.com, wizzair.com]
   - name: Notifications
     description: Automated alerts from other services — calendar, security, app notifications.
+    match:
+      domains: [worldclass.ro, yahoo.com, apple.com]
   - name: Newsletters
     description: Subscriptions, digests, blogs, recurring marketing content.
-  - name: Receipts
-    description: Order confirmations, invoices, payment and shipping notices.
+    match:
+      domains: [morningbrew.com, beehiiv.com, expertmind.com]
+  - name: Bills
+    description: Utility and telecom invoices and payment reminders.
+    match:
+      domains: [eon-romania.ro, eon.ro, digi.ro]
+  - name: Social
+    description: Social-network notifications and activity digests.
+    match:
+      domains: [linkedin.com, strava.com]
+  - name: Personal
+    description: Real people writing to you directly; friends, family, 1:1 threads.
   - name: Other
-    description: Anything that does not clearly fit the categories above.
+    description: Anything that does not clearly fit the categories above — let the AI decide.
