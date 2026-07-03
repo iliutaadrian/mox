@@ -57,8 +57,14 @@ it (`./spark-cli.db`). Override either with `--config` and `--db`.
 
 ## Keys
 
+The inbox opens as a **full-width list** (no auto-preview). Press `enter` to open
+the highlighted email in a reading view; `esc`/`q` returns to the list.
+
+**List view**
+
 | Key            | Action                                                  |
 | -------------- | ------------------------------------------------------- |
+| `enter`        | Open the highlighted email                              |
 | `r`            | Fetch new mail + classify                               |
 | `tab` / `h` `l`| Switch focus between sidebar and message list           |
 | `j` / `k` (↑↓) | Move within the focused pane                            |
@@ -66,17 +72,27 @@ it (`./spark-cli.db`). Override either with `--config` and `--db`.
 | `R`            | AI re-categorize the selected (or highlighted) messages |
 | `m`            | Manually move the selection to a category               |
 | `A`            | Create a sender rule from the selection → a category    |
+| `M` / `U`      | Mark selection read / unread **on the server**          |
 | `p`            | Approve the AI's suggested category for a message       |
 | `esc`          | Clear the selection                                     |
-| `ctrl+u/d`     | Scroll the reading pane                                 |
 | `q`            | Quit                                                    |
+
+**Reading view** (after `enter`)
+
+| Key            | Action                                                  |
+| -------------- | ------------------------------------------------------- |
+| `j` / `k`      | Next / previous email                                   |
+| `ctrl+u/d`     | Scroll the email                                        |
+| `v`            | Open the full HTML email in your browser                |
+| `M` / `U`      | Mark read / unread on the server                        |
+| `esc` / `q`    | Back to the list                                        |
 
 The sidebar has an **All** view on top; a **Mailboxes** section (one entry per
 account, shown when you have more than one) to explore a single mailbox; and the
 category buckets split into **Manual** (rule-based) and **AI** sections. Category
-buckets span all mailboxes. The reading pane shows each email's `Mailbox` so you
-can tell accounts apart in any view. Bulk actions operate on the space-selected
-messages, or the highlighted one if nothing is selected.
+buckets span all mailboxes. The reading view shows each email's `Mailbox` so you
+can tell accounts apart. Bulk actions operate on the space-selected messages, or
+the highlighted one if nothing is selected.
 
 The **Suggested** bucket collects messages whose best category the AI thinks is
 new. Select one and press `p` to promote that category into your fixed set —

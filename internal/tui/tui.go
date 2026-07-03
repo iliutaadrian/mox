@@ -32,13 +32,13 @@ import (
 	"github.com/iliutaadrian/spark-cli/internal/store"
 )
 
+// sidebarWidth is the fixed left-column width; the right column (list or reading)
+// takes the rest. paneBorders is the horizontal cells consumed by the two pane
+// borders (2 each) — content widths plus this must equal the terminal width, or
+// lipgloss wraps the body and the layout cascades.
 const (
 	sidebarWidth = 26
-	listWidth    = 40
-	// paneBorders is the horizontal cells consumed by the three pane borders
-	// (2 each). The content widths plus this must equal the terminal width, or
-	// lipgloss wraps the body and the layout cascades when the list fills.
-	paneBorders = 6
+	paneBorders  = 4
 )
 
 const allBucket = "\x00all" // sentinel name for the "All" sidebar entry
@@ -54,6 +54,14 @@ var (
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	headerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
 	markStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+)
+
+// viewMode is the top-level screen: the full-width list, or a single opened email.
+type viewMode int
+
+const (
+	modeList    viewMode = iota // browse the list (no auto-preview)
+	modeReading                 // reading one opened email
 )
 
 type focusArea int
@@ -113,6 +121,7 @@ type model struct {
 	catIdx int // index into side (always points at a selectable row)
 	msgIdx int
 	focus  focusArea
+	mode   viewMode // list (default) vs reading an opened email
 
 	selected map[int64]bool // multi-selected message IDs
 
@@ -418,9 +427,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.mode == modeReading {
+		return m.handleReadingKey(msg)
+	}
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "enter": // open the highlighted email
+		if m.currentMessage() != nil {
+			m.mode = modeReading
+			m.syncViewport()
+		}
 	case "r":
 		if !m.busy {
 			m.busy = true
@@ -484,6 +501,44 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.vp.HalfPageDown()
 	case "ctrl+u", "pgup":
 		m.vp.HalfPageUp()
+	}
+	return m, nil
+}
+
+// handleReadingKey handles keys while an email is open. Esc/left/backspace/q
+// return to the list; j/k move to the next/previous email; ctrl+u/d scroll.
+func (m *model) handleReadingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q", "h", "left", "backspace":
+		m.mode = modeList
+	case "ctrl+c":
+		return m, tea.Quit
+	case "down", "j": // next email
+		m.moveDown()
+		m.syncViewport()
+	case "up", "k": // previous email
+		m.moveUp()
+		m.syncViewport()
+	case "ctrl+d", "pgdown":
+		m.vp.HalfPageDown()
+	case "ctrl+u", "pgup":
+		m.vp.HalfPageUp()
+	case "v": // open the full HTML in the browser
+		m.openInBrowser()
+	case "M":
+		if len(m.targetIDs()) > 0 && !m.busy {
+			m.busy = true
+			m.status = "Marking read on server…"
+			return m, m.markSeenCmd(true)
+		}
+	case "U":
+		if len(m.targetIDs()) > 0 && !m.busy {
+			m.busy = true
+			m.status = "Marking unread on server…"
+			return m, m.markSeenCmd(false)
+		}
+	case "p":
+		m.promote()
 	}
 	return m, nil
 }
@@ -584,19 +639,20 @@ func (m *model) createRule(ids []int64, choice string) error {
 	return nil
 }
 
+// moveUp/moveDown change the selection only. They do NOT refresh the reading
+// pane — the email is shown on demand (Enter), not auto-previewed. In reading
+// mode the caller re-syncs the viewport to page through emails.
 func (m *model) moveUp() {
 	if m.focus == focusSidebar {
 		if i := m.nextSelectable(m.catIdx, -1); i != m.catIdx {
 			m.catIdx = i
 			m.msgIdx = 0
 			m.clampMsg()
-			m.syncViewport()
 		}
 		return
 	}
 	if m.msgIdx > 0 {
 		m.msgIdx--
-		m.syncViewport()
 	}
 }
 
@@ -606,13 +662,11 @@ func (m *model) moveDown() {
 			m.catIdx = i
 			m.msgIdx = 0
 			m.clampMsg()
-			m.syncViewport()
 		}
 		return
 	}
 	if m.msgIdx < len(m.currentMessages())-1 {
 		m.msgIdx++
-		m.syncViewport()
 	}
 }
 
@@ -717,40 +771,25 @@ func (m *model) reclassifyCmd(ids []int64) tea.Cmd {
 	}
 }
 
-// layout sizes the panes to the terminal.
+// layout sizes the panes to the terminal. Two columns: the sidebar and, to its
+// right, EITHER the message list or the opened email (depending on mode). Each
+// pane has a 2-column border, so the right column width = width - sidebar - 4,
+// filling the terminal exactly (no overflow, which would wrap and cascade).
 func (m *model) layout() {
-	bodyHeight := m.height - 4 // header + footer + borders padding
+	bodyHeight := m.height - 4 // header + footer + borders
 	if bodyHeight < 3 {
 		bodyHeight = 3
 	}
-	// Split the width left of the sidebar between the list and reading panes so
-	// the three panes plus their borders exactly fill the terminal (no overflow,
-	// which would wrap the body and cascade the layout). The list prefers
-	// listWidth but yields space so the reading pane keeps a usable minimum.
-	const readMin = 24
-	avail := m.width - sidebarWidth - paneBorders
-	if avail < 0 {
-		avail = 0
+	right := m.width - sidebarWidth - paneBorders
+	if right < 16 {
+		right = 16
 	}
-	lw := listWidth
-	if lw > avail-readMin { // yield space so the reading pane keeps readMin
-		lw = avail - readMin
-	}
-	if lw < 16 {
-		lw = 16
-	}
-	if lw > avail { // never exceed the available width (keeps rw >= 0)
-		lw = avail
-	}
-	// rw takes the exact remainder, so sidebar+list+reading+borders == width and
-	// the body never overflows (which would wrap and cascade the layout).
-	rw := avail - lw
-	m.listW, m.readW = lw, rw
+	m.listW, m.readW = right, right
 
 	if !m.ready {
-		m.vp = viewport.New(rw, bodyHeight)
+		m.vp = viewport.New(right, bodyHeight)
 	} else {
-		m.vp.Width = rw
+		m.vp.Width = right
 		m.vp.Height = bodyHeight
 	}
 }
@@ -770,21 +809,23 @@ func (m *model) View() string {
 	header := titleStyle.Render("spark-cli") + "  " +
 		statusStyle.Render(truncPlain(m.status, max(0, m.width-11)))
 
-	sidebar := m.renderSidebar(bodyHeight)
-	list := m.renderList(m.listW, bodyHeight)
-	reading := m.renderReading(bodyHeight)
+	sb := pane(m.focus == focusSidebar && m.mode == modeList).
+		Width(sidebarWidth).Height(bodyHeight).Render(m.renderSidebar(bodyHeight))
 
-	sb := pane(m.focus == focusSidebar).Width(sidebarWidth).Height(bodyHeight).Render(sidebar)
-	ls := pane(m.focus == focusList).Width(m.listW).Height(bodyHeight).Render(list)
-	rd := paneStyle.Height(bodyHeight).Render(reading)
-
-	body := lipgloss.JoinHorizontal(lipgloss.Top, sb, ls, rd)
-
-	sel := ""
-	if len(m.selected) > 0 {
-		sel = fmt.Sprintf(" · %d selected", len(m.selected))
+	var rightCol, hint string
+	if m.mode == modeReading {
+		rightCol = activePane.Width(m.readW).Height(bodyHeight).Render(m.renderReading(bodyHeight))
+		hint = "j/k next/prev · ctrl+u/d scroll · v html · M/U read/unread · esc/q back · ctrl+c quit"
+	} else {
+		rightCol = pane(m.focus == focusList).Width(m.listW).Height(bodyHeight).Render(m.renderList(m.listW, bodyHeight))
+		sel := ""
+		if len(m.selected) > 0 {
+			sel = fmt.Sprintf(" · %d selected", len(m.selected))
+		}
+		hint = "enter open · space select · r refresh · R recat · m move · A rule · M/U read/unread · q quit" + sel
 	}
-	hint := "r refresh · space select · R recat · m move · A rule · v html · M/U read/unread · p approve · q quit" + sel
+
+	body := lipgloss.JoinHorizontal(lipgloss.Top, sb, rightCol)
 	footer := footerStyle.Render(truncPlain(hint, m.width))
 	return header + "\n" + body + "\n" + footer
 }

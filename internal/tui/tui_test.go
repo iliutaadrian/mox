@@ -31,18 +31,20 @@ func TestFitExactDisplayWidth(t *testing.T) {
 // overflow makes lipgloss wrap the body and the layout cascades while scrolling.
 // For any realistic width they should fill it exactly.
 func TestLayoutBudgetFits(t *testing.T) {
+	// Two columns now: sidebar + right (list or reading). They plus the two pane
+	// borders must fill the width exactly.
 	for _, w := range []int{58, 60, 70, 80, 100, 120, 160, 200} {
 		m := &model{width: w, height: 30}
 		m.layout()
-		total := sidebarWidth + m.listW + m.readW + paneBorders
-		if total > w {
-			t.Errorf("width %d: panes total %d overflows", w, total)
-		}
+		total := sidebarWidth + m.readW + paneBorders
 		if total != w {
-			t.Errorf("width %d: panes total %d should fill exactly", w, total)
+			t.Errorf("width %d: sidebar+right+borders = %d, should fill exactly", w, total)
 		}
-		if m.readW < 1 || m.listW < 1 {
-			t.Errorf("width %d: degenerate pane sizes list=%d read=%d", w, m.listW, m.readW)
+		if m.readW != m.listW {
+			t.Errorf("width %d: list and reading widths should match (%d vs %d)", w, m.listW, m.readW)
+		}
+		if m.readW < 1 {
+			t.Errorf("width %d: degenerate right pane width %d", w, m.readW)
 		}
 	}
 }
