@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/iliutaadrian/spark-cli/internal/ai"
 	"github.com/iliutaadrian/spark-cli/internal/config"
+	"github.com/iliutaadrian/spark-cli/internal/engine"
 	"github.com/iliutaadrian/spark-cli/internal/mail"
 	"github.com/iliutaadrian/spark-cli/internal/store"
 	"github.com/iliutaadrian/spark-cli/internal/tui"
@@ -30,6 +32,11 @@ func run() error {
 	cfgPath := flag.String("config", defaultCfg, "path to config.yaml")
 	dbPath := flag.String("db", "", "path to local SQLite db (default: alongside config)")
 	fetchOnly := flag.Bool("fetch", false, "fetch + store new mail only (no AI classification), then exit")
+	syncOnly := flag.Bool("sync", false, "fetch + classify, then exit (headless backend for the Ink TUI)")
+	mark := flag.String("mark", "", "mark -ids read|unread on the server, then exit")
+	move := flag.String("move", "", "move -ids to this category (manual), then exit")
+	reclassify := flag.Bool("reclassify", false, "AI re-categorize -ids, then exit")
+	idsCSV := flag.String("ids", "", "comma-separated local db message ids for -mark/-move/-reclassify")
 	flag.Parse()
 
 	// Load secrets from a .env file alongside the config (e.g. OPENAI_API_KEY).
@@ -76,7 +83,115 @@ func run() error {
 	// API key resolves from OPENAI_API_KEY when passed empty.
 	cls := ai.New(os.Getenv("OPENAI_API_KEY"), cfg.Model)
 
+	// Headless backend modes for the Ink TUI. Each prints one summary line to
+	// stdout and exits; errors go to stderr with exit code 1.
+	switch {
+	case *syncOnly:
+		newMail, classified, err := engine.Refresh(context.Background(), st, cfg, cls)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("fetched=%d classified=%d\n", newMail, classified)
+		return nil
+	case *mark != "":
+		ids, err := parseIDs(*idsCSV)
+		if err != nil {
+			return err
+		}
+		seen := *mark == "read"
+		if !seen && *mark != "unread" {
+			return fmt.Errorf("-mark must be read or unread")
+		}
+		n, err := markSeen(st, cfg, ids, seen)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("marked=%d\n", n)
+		return nil
+	case *move != "":
+		ids, err := parseIDs(*idsCSV)
+		if err != nil {
+			return err
+		}
+		if err := st.SetCategoryManual(ids, *move); err != nil {
+			return err
+		}
+		fmt.Printf("moved=%d\n", len(ids))
+		return nil
+	case *reclassify:
+		ids, err := parseIDs(*idsCSV)
+		if err != nil {
+			return err
+		}
+		n, err := engine.Reclassify(context.Background(), st, cfg, cls, ids)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("reclassified=%d\n", n)
+		return nil
+	}
+
 	return tui.Run(st, cfg, cls, *cfgPath)
+}
+
+func parseIDs(csv string) ([]int64, error) {
+	if strings.TrimSpace(csv) == "" {
+		return nil, fmt.Errorf("-ids required")
+	}
+	var ids []int64
+	for _, part := range strings.Split(csv, ",") {
+		var id int64
+		if _, err := fmt.Sscanf(strings.TrimSpace(part), "%d", &id); err != nil || id <= 0 {
+			return nil, fmt.Errorf("bad id %q", part)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// markSeen sets \Seen on the server for the given db ids (grouped by account,
+// one connection each) and mirrors the flag locally. Same behavior as the Go
+// TUI's M/U keys.
+func markSeen(st *store.Store, cfg *config.Config, ids []int64, seen bool) (int, error) {
+	msgs, err := st.All()
+	if err != nil {
+		return 0, err
+	}
+	byID := make(map[int64]store.Message, len(msgs))
+	for _, m := range msgs {
+		byID[m.ID] = m
+	}
+	accByName := make(map[string]config.Account, len(cfg.Accounts))
+	for _, a := range cfg.Accounts {
+		accByName[a.Name] = a
+	}
+	uidsByAcc := map[string][]uint32{}
+	idsByAcc := map[string][]int64{}
+	for _, id := range ids {
+		m, ok := byID[id]
+		if !ok {
+			return 0, fmt.Errorf("unknown id %d", id)
+		}
+		uidsByAcc[m.Account] = append(uidsByAcc[m.Account], m.UID)
+		idsByAcc[m.Account] = append(idsByAcc[m.Account], id)
+	}
+	n := 0
+	for accName, uids := range uidsByAcc {
+		acc, ok := accByName[accName]
+		if !ok {
+			return n, fmt.Errorf("account %q not in config", accName)
+		}
+		if err := mail.SetSeen(acc, uids, seen); err != nil {
+			return n, err
+		}
+		for _, id := range idsByAcc[accName] {
+			if err := st.SetSeen(id, seen); err != nil {
+				return n, err
+			}
+		}
+		n += len(uids)
+	}
+	return n, nil
 }
 
 // loadDotEnv reads KEY=VALUE lines from path and sets each in the process
