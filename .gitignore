@@ -5,3 +5,7 @@
 *.db
 config.yaml
 .env
+
+# task-observer skill log (not part of the app)
+skill-observations/
+fetch.log
