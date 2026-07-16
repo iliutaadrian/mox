@@ -19,11 +19,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/iliutaadrian/spark-cli/internal/ai"
 	"github.com/iliutaadrian/spark-cli/internal/config"
@@ -54,6 +55,7 @@ var (
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	headerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
 	markStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	catStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("109"))
 )
 
 // viewMode is the top-level screen: the full-width list, or a single opened email.
@@ -378,7 +380,9 @@ func (m *model) syncViewport() {
 		body = msg.Snippet
 	}
 	b.WriteString(body)
-	m.vp.SetContent(b.String())
+	// Same width normalization as the list: optional-emoji symbols in bodies
+	// otherwise render wider than counted and wrap the reading pane.
+	m.vp.SetContent(emojiPresentation(b.String()))
 	m.vp.GotoTop()
 }
 
@@ -827,7 +831,14 @@ func (m *model) View() string {
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, sb, rightCol)
 	footer := footerStyle.Render(truncPlain(hint, m.width))
-	return header + "\n" + body + "\n" + footer
+	out := header + "\n" + body + "\n" + footer
+	// Insurance: never emit more lines than the terminal has. A frame taller
+	// than the terminal scrolls it, and bubbletea's line-diff renderer never
+	// recovers — stale rows stay behind as ghost duplicates.
+	if lines := strings.Split(out, "\n"); len(lines) > m.height {
+		out = strings.Join(lines[:m.height], "\n")
+	}
+	return out
 }
 
 func (m *model) viewPicker() string {
@@ -894,8 +905,49 @@ func (m *model) renderList(w, h int) string {
 	if len(msgs) == 0 {
 		return dimStyle.Render("(empty)")
 	}
-	var lines []string
-	for i, msg := range msgs {
+	// Column widths within the row; the subject takes whatever is left. On a
+	// narrow pane shed the category column, then shrink the sender, so the
+	// fixed columns can never exceed the row width — an over-wide row wraps
+	// inside the pane, grows the frame past the terminal height, and desyncs
+	// the renderer into ghost rows.
+	const dateW = 6 // "Jan 02"
+	senderW, catW := 18, 13
+	if w < 72 {
+		catW = 0
+	}
+	if w < 48 {
+		senderW = 10
+	}
+	fixed := 2 + 1 + senderW + 1 + dateW + 1 // marks + sender + date + spaces
+	if catW > 0 {
+		fixed += catW + 1
+	}
+	subjW := w - fixed
+	if subjW < 0 {
+		subjW = 0
+	}
+
+	// Build ONLY the visible window of rows. The list can hold tens of
+	// thousands of messages; styling all of them on every keystroke (and then
+	// clipping to ~25) makes scrolling crawl.
+	start := 0
+	if len(msgs) > h {
+		start = m.msgIdx - h/2
+		if start < 0 {
+			start = 0
+		}
+		if start+h > len(msgs) {
+			start = len(msgs) - h
+		}
+	}
+	end := start + h
+	if end > len(msgs) {
+		end = len(msgs)
+	}
+
+	lines := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		msg := msgs[i]
 		from := oneLine(msg.FromName)
 		if from == "" {
 			from = oneLine(msg.FromAddr)
@@ -904,25 +956,47 @@ func (m *model) renderList(w, h int) string {
 		if subj == "" {
 			subj = "(no subject)"
 		}
-		mark := "  "
+		cat := msg.Category
+		if cat == "" {
+			cat = "—"
+		}
+		// Prefix: selection marker + read/unread dot.
+		selCh, readCh := " ", " "
 		if m.selected[msg.ID] {
-			mark = "● "
+			selCh = "●"
 		}
-		// Build the whole row as one plain string, then clamp to exactly w cells
-		// (width-aware) and style it across the full width. Doing the mark inside
-		// the single fit guarantees the row can never exceed the pane and wrap.
-		row := fit(mark+fit(from, 12)+" "+subj, w)
-		switch {
-		case i == m.msgIdx:
-			row = selectedStyle.Render(row)
-		case m.selected[msg.ID]:
-			row = markStyle.Render(row)
-		case !msg.Seen:
-			row = unseenStyle.Render(row)
+		if !msg.Seen {
+			readCh = "•"
 		}
-		lines = append(lines, row)
+		sender := fit(from, senderW)
+		subject := fit(subj, subjW)
+		date := fit(msg.Date.Format("Jan 02"), dateW)
+		plainCat, styledCat := "", ""
+		if catW > 0 {
+			c := fit(cat, catW)
+			plainCat = c + " "
+			styledCat = catStyle.Render(c) + " "
+		}
+
+		if i == m.msgIdx {
+			// Cursor row: plain text, highlighted across the full width.
+			plain := fit(selCh+readCh+" "+sender+" "+plainCat+subject+" "+date, w)
+			lines = append(lines, selectedStyle.Render(plain))
+			continue
+		}
+		// Colored segments: pink selection dot, category tinted, date dimmed.
+		// Unread rows bold the sender + subject (styling the whole composed row
+		// wouldn't survive the embedded resets of the inner segments).
+		sendSeg, subjSeg := sender, subject
+		if !msg.Seen {
+			sendSeg, subjSeg = unseenStyle.Render(sender), unseenStyle.Render(subject)
+		}
+		row := markStyle.Render(selCh) + readCh + " " + sendSeg + " " +
+			styledCat + subjSeg + " " + dimStyle.Render(date)
+		// Hard clamp (ANSI-aware): a row must never exceed the pane width.
+		lines = append(lines, ansi.Truncate(row, w, ""))
 	}
-	return clipAround(lines, m.msgIdx, h)
+	return strings.Join(lines, "\n")
 }
 
 func (m *model) renderReading(h int) string {
@@ -932,14 +1006,20 @@ func (m *model) renderReading(h int) string {
 // --- small helpers ---
 
 // fit truncates s to exactly w display cells (not runes) and right-pads with
-// spaces. Display-width aware via runewidth, so emoji and CJK in subjects — each
-// 1 rune but 2 cells — can never overflow the pane and wrap the layout.
+// spaces. Widths MUST be measured with x/ansi — the same grapheme-aware measure
+// lipgloss and bubbletea use. go-runewidth disagrees with it on VS16 emoji
+// ("❤️"), ZWJ sequences and flag emoji, and a row even 1 cell over-wide wraps
+// inside the pane, makes the frame taller than the terminal, and permanently
+// desyncs the renderer (ghost rows).
 func fit(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	s = runewidth.Truncate(s, w, "…")
-	return runewidth.FillRight(s, w)
+	s = ansi.Truncate(s, w, "…")
+	if pad := w - ansi.StringWidth(s); pad > 0 {
+		s += strings.Repeat(" ", pad)
+	}
+	return s
 }
 
 func clip(lines []string, h int) string {
@@ -947,21 +1027,6 @@ func clip(lines []string, h int) string {
 		lines = lines[:h]
 	}
 	return strings.Join(lines, "\n")
-}
-
-// clipAround keeps index visible within an h-line window.
-func clipAround(lines []string, index, h int) string {
-	if len(lines) <= h {
-		return strings.Join(lines, "\n")
-	}
-	start := index - h/2
-	if start < 0 {
-		start = 0
-	}
-	if start+h > len(lines) {
-		start = len(lines) - h
-	}
-	return strings.Join(lines[start:start+h], "\n")
 }
 
 func max(a, b int) int {
@@ -987,19 +1052,80 @@ func humanSize(n int) string {
 // returns and tabs into spaces — email subjects/names sometimes contain these,
 // and an embedded newline would break the fixed-height list layout.
 func oneLine(s string) string {
-	return strings.Map(func(r rune) rune {
+	return emojiPresentation(strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' || r == '\t' {
 			return ' '
 		}
 		return r
-	}, s)
+	}, s))
 }
 
-// truncPlain truncates an unstyled string to w display cells with an ellipsis
-// (no padding). Inputs must not contain ANSI escapes.
+// optionalEmoji holds BMP symbols with OPTIONAL emoji presentation (Emoji=Yes,
+// Emoji_Presentation=No in Unicode emoji-data, minus ©®™ℹ which are near
+// universally text-rendered). Terminals disagree on their width: uniseg (and
+// lipgloss/bubbletea) count 1 cell, but e.g. tmux built with utf8proc draws
+// some of them ("✍" in real eMAG subjects) 2 cells wide. A row even one
+// physical cell over-wide wraps, scrolls the terminal, and permanently
+// desyncs bubbletea's renderer into ghost rows.
+var optionalEmoji = &unicode.RangeTable{
+	R16: []unicode.Range16{
+		{0x203C, 0x203C, 1}, {0x2049, 0x2049, 1},
+		{0x2194, 0x2199, 1}, {0x21A9, 0x21AA, 1},
+		{0x2328, 0x2328, 1}, {0x23CF, 0x23CF, 1},
+		{0x23ED, 0x23EF, 1}, {0x23F1, 0x23F2, 1}, {0x23F8, 0x23FA, 1},
+		{0x25AA, 0x25AB, 1}, {0x25B6, 0x25B6, 1}, {0x25C0, 0x25C0, 1},
+		{0x25FB, 0x25FC, 1},
+		{0x2600, 0x2604, 1}, {0x260E, 0x260E, 1}, {0x2611, 0x2611, 1},
+		{0x2618, 0x2618, 1}, {0x261D, 0x261D, 1}, {0x2620, 0x2620, 1},
+		{0x2622, 0x2623, 1}, {0x2626, 0x2626, 1}, {0x262A, 0x262A, 1},
+		{0x262E, 0x262F, 1}, {0x2638, 0x263A, 1}, {0x2640, 0x2640, 1},
+		{0x2642, 0x2642, 1}, {0x265F, 0x2660, 1}, {0x2663, 0x2663, 1},
+		{0x2665, 0x2666, 1}, {0x2668, 0x2668, 1}, {0x267B, 0x267B, 1},
+		{0x267E, 0x267E, 1}, {0x2692, 0x2692, 1}, {0x2694, 0x2697, 1},
+		{0x2699, 0x2699, 1}, {0x269B, 0x269C, 1}, {0x26A0, 0x26A0, 1},
+		{0x26A7, 0x26A7, 1}, {0x26B0, 0x26B1, 1}, {0x26C8, 0x26C8, 1},
+		{0x26CF, 0x26CF, 1}, {0x26D1, 0x26D1, 1}, {0x26D3, 0x26D3, 1},
+		{0x26E9, 0x26E9, 1}, {0x26F0, 0x26F1, 1}, {0x26F4, 0x26F4, 1},
+		{0x26F7, 0x26F9, 1},
+		{0x2702, 0x2702, 1}, {0x2708, 0x2709, 1}, {0x270C, 0x270D, 1},
+		{0x270F, 0x270F, 1}, {0x2712, 0x2712, 1}, {0x2714, 0x2714, 1},
+		{0x2716, 0x2716, 1}, {0x271D, 0x271D, 1}, {0x2721, 0x2721, 1},
+		{0x2733, 0x2734, 1}, {0x2744, 0x2744, 1}, {0x2747, 0x2747, 1},
+		{0x2763, 0x2764, 1}, {0x27A1, 0x27A1, 1},
+		{0x2934, 0x2935, 1}, {0x2B05, 0x2B07, 1},
+		{0x3030, 0x3030, 1}, {0x303D, 0x303D, 1},
+		{0x3297, 0x3297, 1}, {0x3299, 0x3299, 1},
+	},
+}
+
+// emojiPresentation appends VS16 (U+FE0F) to optional-emoji symbols that don't
+// already carry a variation selector, forcing explicit emoji presentation.
+// Then every width authority (uniseg, utf8proc, emoji-font terminals) agrees
+// on 2 cells and rows can't silently overflow the pane.
+func emojiPresentation(s string) string {
+	if !strings.ContainsFunc(s, func(r rune) bool { return unicode.Is(optionalEmoji, r) }) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	runes := []rune(s)
+	for i, r := range runes {
+		b.WriteRune(r)
+		if unicode.Is(optionalEmoji, r) {
+			if i+1 < len(runes) && (runes[i+1] == 0xFE0E || runes[i+1] == 0xFE0F) {
+				continue // presentation already explicit
+			}
+			b.WriteRune(0xFE0F)
+		}
+	}
+	return b.String()
+}
+
+// truncPlain truncates a string to w display cells with an ellipsis (no
+// padding), ANSI-aware and measured like lipgloss/bubbletea (see fit).
 func truncPlain(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	return runewidth.Truncate(s, w, "…")
+	return ansi.Truncate(s, w, "…")
 }
