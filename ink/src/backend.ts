@@ -24,9 +24,10 @@ async function folderName(cache: Map<string, Map<string, string>>, acc: Account,
 
 export function backend(store: Store, cfg: Config, cfgPath: string) {
   return {
+    // Interactive refresh: INBOX only (fast). Folders sync via `cli sync`.
     async sync(): Promise<Result> {
       try {
-        const { fetched, filed } = await refresh(store, cfg);
+        const { fetched, filed } = await refresh(store, cfg, true);
         return { ok: true, out: `fetched ${fetched}, filed ${filed} by rules` };
       } catch (e) {
         return { ok: false, out: String(e) };

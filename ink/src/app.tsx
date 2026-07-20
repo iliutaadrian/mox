@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { Store, FOLDER_CLASSES, type Filter, type MessageRow } from "./db.ts";
 import { loadConfig, categoryHasRules, type Config } from "./config.ts";
 import { backend } from "./backend.ts";
+import { warmConnections } from "./mail.ts";
 import { fit, oneLine } from "./text.ts";
 import { useMouse, isMouseSeq } from "./mouse.ts";
 
@@ -110,6 +111,10 @@ export function App({
     stdout.on("resize", onResize);
     return () => void stdout.off("resize", onResize);
   }, [stdout]);
+
+  // Open IMAP connections in the background at startup so the first `r` refresh
+  // doesn't pay the login cost.
+  useEffect(() => void warmConnections(cfg.accounts), [cfg]);
 
   const [version, setVersion] = useState(0); // bump after writes to re-query
   const [catIdx, setCatIdx] = useState(0);

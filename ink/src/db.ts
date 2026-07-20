@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS messages (
   UNIQUE(account, mailbox, uid)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_category ON messages(category);
+CREATE INDEX IF NOT EXISTS idx_messages_mailbox ON messages(mailbox, date);
+CREATE INDEX IF NOT EXISTS idx_messages_acct_mbox ON messages(account, mailbox, date);
 CREATE TABLE IF NOT EXISTS sync_state (
   account TEXT NOT NULL, mailbox TEXT NOT NULL,
   uid_validity INTEGER NOT NULL DEFAULT 0, last_uid INTEGER NOT NULL DEFAULT 0,
@@ -105,20 +107,22 @@ CREATE TABLE IF NOT EXISTS approved_categories (
 
   // ---- reads (TUI) ----
 
-  list(f: Filter): MessageRow[] {
+  // The list is capped: the TUI only browses recent mail, and building a
+  // 20k-row array on every render is what made startup/scroll feel slow.
+  list(f: Filter, limit = 1000): MessageRow[] {
     switch (f.kind) {
       case "all":
-        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' ORDER BY date DESC`).all() as MessageRow[];
+        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' ORDER BY date DESC LIMIT ?`).all(limit) as MessageRow[];
       case "account":
-        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE account=? AND mailbox='INBOX' ORDER BY date DESC`).all(f.name) as MessageRow[];
+        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE account=? AND mailbox='INBOX' ORDER BY date DESC LIMIT ?`).all(f.name, limit) as MessageRow[];
       case "folder":
-        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox=? ORDER BY date DESC`).all(f.class) as MessageRow[];
+        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox=? ORDER BY date DESC LIMIT ?`).all(f.class, limit) as MessageRow[];
       case "category": {
         const where = f.name === UNCATEGORIZED
           ? "(category IS NULL OR category='' OR category='Uncategorized')"
           : "category=?";
-        const q = `SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' AND ${where} ORDER BY date DESC`;
-        return (f.name === UNCATEGORIZED ? this.db.query(q).all() : this.db.query(q).all(f.name)) as MessageRow[];
+        const q = `SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' AND ${where} ORDER BY date DESC LIMIT ?`;
+        return (f.name === UNCATEGORIZED ? this.db.query(q).all(limit) : this.db.query(q).all(f.name, limit)) as MessageRow[];
       }
       case "search": {
         if (!f.query.trim()) return [];

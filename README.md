@@ -56,11 +56,15 @@ account password.
 ./spark                 # launcher (bun ink/src/index.tsx)
 ```
 
-The db is created next to `config.yaml` (`./spark-cli.db`) on first run. Bulk
-backfills (e.g. after raising `fetch_since_days`) are faster headless:
+The db is created next to `config.yaml` (`./spark-cli.db`) on first run. IMAP
+connections are pooled and pre-warmed at startup, so `r` refreshes fast.
+
+In-app `r` refreshes the **INBOX** only (fast). **Sent/Spam/Archive** change
+rarely — refresh them (and do bulk backfills after raising `fetch_since_days`)
+headless:
 
 ```bash
-bun ink/src/cli.ts sync                 # fetch all folders + rule-file, exit
+bun ink/src/cli.ts sync                 # fetch ALL folders + rule-file, exit
 bun ink/src/cli.ts attach <id> [name]   # download an attachment on demand
 ```
 

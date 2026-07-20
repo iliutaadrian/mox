@@ -40,11 +40,19 @@ export function applyRules(store: Store, cfg: Config): number {
 }
 
 /** refresh fetches new mail across all folders, then files the INBOX by rules. */
-export async function refresh(store: Store, cfg: Config): Promise<{ fetched: number; filed: number }> {
-  let fetched = 0;
-  for (const acc of cfg.accounts) {
-    fetched += await syncAll(store, acc, cfg.fetchLimit, cfg.fetchSinceDays);
-  }
+export async function refresh(
+  store: Store,
+  cfg: Config,
+  inboxOnly = false,
+): Promise<{ fetched: number; filed: number }> {
+  // Accounts sync concurrently (independent connections), so total time is the
+  // slowest account, not the sum. inboxOnly keeps the interactive `r` fast.
+  const counts = await Promise.all(
+    cfg.accounts.map((acc) =>
+      syncAll(store, acc, cfg.fetchLimit, cfg.fetchSinceDays, inboxOnly).catch(() => 0),
+    ),
+  );
+  const fetched = counts.reduce((a, b) => a + b, 0);
   const filed = classifyByRules(store, cfg);
   return { fetched, filed };
 }
