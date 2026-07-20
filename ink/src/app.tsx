@@ -9,7 +9,7 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Store, type Filter, type MessageRow } from "./db.ts";
+import { Store, FOLDER_CLASSES, type Filter, type MessageRow } from "./db.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { backend } from "./backend.ts";
 import { fit, oneLine } from "./text.ts";
@@ -25,7 +25,8 @@ type SideEntry =
   | { kind: "all"; label: string }
   | { kind: "header"; label: string }
   | { kind: "account"; name: string; label: string }
-  | { kind: "category"; name: string; label: string };
+  | { kind: "category"; name: string; label: string }
+  | { kind: "folder"; cls: string; label: string };
 
 function buildSidebar(store: Store, cfg: Config): SideEntry[] {
   const accCounts = store.accountCounts();
@@ -58,12 +59,21 @@ function buildSidebar(store: Store, cfg: Config): SideEntry[] {
     for (const name of ai)
       entries.push({ kind: "category", name, label: `${name} (${catCounts.get(name)})` });
   }
+
+  const folderCounts = store.folderCounts();
+  const folderRows = FOLDER_CLASSES.filter((c) => (folderCounts.get(c) ?? 0) > 0);
+  if (folderRows.length > 0) {
+    entries.push({ kind: "header", label: "Folders" });
+    for (const c of folderRows)
+      entries.push({ kind: "folder", cls: c, label: `${c} (${folderCounts.get(c)})` });
+  }
   return entries;
 }
 
 function filterOf(e: SideEntry): Filter {
   if (e.kind === "account") return { kind: "account", name: e.name };
   if (e.kind === "category") return { kind: "category", name: e.name };
+  if (e.kind === "folder") return { kind: "folder", class: e.cls };
   return { kind: "all" };
 }
 

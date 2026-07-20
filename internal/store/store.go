@@ -32,16 +32,16 @@ const Uncategorized = "Uncategorized"
 
 // Message is one email plus its local-only AI fields.
 type Message struct {
-	ID        int64
-	Account   string
-	Mailbox   string
-	UID       uint32
-	MessageID string
-	FromAddr  string
-	FromName  string
-	Subject   string
-	Date      time.Time
-	Snippet   string
+	ID          int64
+	Account     string
+	Mailbox     string
+	UID         uint32
+	MessageID   string
+	FromAddr    string
+	FromName    string
+	Subject     string
+	Date        time.Time
+	Snippet     string
 	Body        string       // plain-text rendering (for reading pane + AI)
 	HTML        string       // full original HTML part, if any (for browser view)
 	Attachments []Attachment // metadata only (filename/type/size)
@@ -234,10 +234,13 @@ func (s *Store) SetSeen(id int64, seen bool) error {
 }
 
 // Unclassified returns up to limit messages with no AI category yet, newest first.
+// Unclassified returns INBOX messages with no category yet. Only the inbox is
+// rule-filed into display categories; Sent/Spam/Archive keep a null category
+// and are browsed via their own folder views, so they are excluded here.
 func (s *Store) Unclassified(limit int) ([]Message, error) {
 	rows, err := s.db.Query(`
 SELECT id, account, mailbox, uid, message_id, from_addr, from_name, subject, date, snippet, body, seen
-FROM messages WHERE category IS NULL ORDER BY date DESC LIMIT ?`, limit)
+FROM messages WHERE category IS NULL AND mailbox = 'INBOX' ORDER BY date DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}

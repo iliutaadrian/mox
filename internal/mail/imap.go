@@ -51,18 +51,110 @@ func dial(acc config.Account) (*imapclient.Client, error) {
 	return c, nil
 }
 
-// Sync pulls mail for one account into the store and returns how many new
-// messages were inserted. New arrivals are always pulled (forward). For the
-// rest it either:
-//   - date-windowed (fetchSinceDays > 0): every message received within the
-//     window, fetching only UIDs not already stored (resumable, no re-download), or
-//   - count-based (otherwise): progressively older mail until the local count
-//     reaches fetchLimit.
-//
-// Either way, raising the limit/window and re-running grows the corpus WITHOUT
-// wiping the database. Strictly read-only: EXAMINE + BODY.PEEK, nothing on the
-// server changes.
+// Folder classes stored in the message/sync_state `mailbox` column. These are
+// normalized labels (not the provider's raw folder names) so the UI can group
+// uniformly across accounts regardless of naming (Bulk vs Junk vs [Gmail]/Spam).
+const (
+	ClassInbox   = "INBOX"
+	ClassSent    = "Sent"
+	ClassSpam    = "Spam"
+	ClassArchive = "Archive"
+)
+
+// Folder pairs a normalized class with the provider's actual IMAP folder name.
+type Folder struct {
+	Class string
+	Name  string // IMAP mailbox name to SELECT
+}
+
+// DetectFolders lists the account's mailboxes and maps Sent/Spam/Archive to
+// their real names via RFC 6154 special-use attributes, falling back to common
+// name heuristics. INBOX is always first. Only classes that exist are returned.
+func DetectFolders(acc config.Account) ([]Folder, error) {
+	c, err := dial(acc)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	defer func() { c.Logout().Wait() }()
+
+	boxes, err := c.List("", "*", &imap.ListOptions{ReturnSpecialUse: true}).Collect()
+	if err != nil {
+		return nil, err
+	}
+
+	byClass := map[string]string{} // class -> IMAP name
+	setClass := func(class, name string) {
+		if _, ok := byClass[class]; !ok {
+			byClass[class] = name
+		}
+	}
+	// First pass: special-use attributes (authoritative).
+	for _, b := range boxes {
+		for _, a := range b.Attrs {
+			switch a {
+			case imap.MailboxAttrSent:
+				setClass(ClassSent, b.Mailbox)
+			case imap.MailboxAttrJunk:
+				setClass(ClassSpam, b.Mailbox)
+			case imap.MailboxAttrArchive:
+				setClass(ClassArchive, b.Mailbox)
+			}
+		}
+	}
+	// Second pass: name heuristics for servers that don't advertise special-use.
+	for _, b := range boxes {
+		lower := strings.ToLower(b.Mailbox)
+		switch {
+		case strings.Contains(lower, "sent"):
+			setClass(ClassSent, b.Mailbox)
+		case lower == "bulk" || strings.Contains(lower, "spam") || strings.Contains(lower, "junk"):
+			setClass(ClassSpam, b.Mailbox)
+		case strings.Contains(lower, "archive"):
+			setClass(ClassArchive, b.Mailbox)
+		}
+	}
+
+	folders := []Folder{{Class: ClassInbox, Name: acc.Mailbox}}
+	for _, class := range []string{ClassSent, ClassSpam, ClassArchive} {
+		if name, ok := byClass[class]; ok {
+			folders = append(folders, Folder{Class: class, Name: name})
+		}
+	}
+	return folders, nil
+}
+
+// SyncAll syncs the account's INBOX plus its Sent/Spam/Archive folders (when
+// present). Returns total new messages across folders. Per-folder errors are
+// returned after attempting the rest, so one bad folder doesn't block others.
+func SyncAll(st *store.Store, acc config.Account, fetchLimit, fetchSinceDays int) (int, error) {
+	folders, err := DetectFolders(acc)
+	if err != nil {
+		return 0, fmt.Errorf("%s: list folders: %w", acc.Name, err)
+	}
+	total := 0
+	var firstErr error
+	for _, f := range folders {
+		n, err := syncFolder(st, acc, f.Name, f.Class, fetchLimit, fetchSinceDays)
+		total += n
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return total, firstErr
+}
+
+// Sync syncs just the account's INBOX (kept for callers/flags that only want
+// the inbox). See SyncAll for the multi-folder version.
 func Sync(st *store.Store, acc config.Account, fetchLimit, fetchSinceDays int) (int, error) {
+	return syncFolder(st, acc, acc.Mailbox, ClassInbox, fetchLimit, fetchSinceDays)
+}
+
+// syncFolder pulls one IMAP folder (imapName) into the store under the given
+// normalized class. New arrivals are pulled forward; the rest is filled either
+// date-windowed (fetchSinceDays > 0) or count-based. Raising the limit/window
+// and re-running grows the corpus WITHOUT wiping the db. Strictly read-only.
+func syncFolder(st *store.Store, acc config.Account, imapName, class_ string, fetchLimit, fetchSinceDays int) (int, error) {
 	c, err := dial(acc)
 	if err != nil {
 		return 0, err
@@ -70,18 +162,18 @@ func Sync(st *store.Store, acc config.Account, fetchLimit, fetchSinceDays int) (
 	defer c.Close()
 	defer func() { c.Logout().Wait() }()
 
-	sel, err := c.Select(acc.Mailbox, &imap.SelectOptions{ReadOnly: true}).Wait()
+	sel, err := c.Select(imapName, &imap.SelectOptions{ReadOnly: true}).Wait()
 	if err != nil {
-		return 0, fmt.Errorf("%s: select %s: %w", acc.Name, acc.Mailbox, err)
+		return 0, fmt.Errorf("%s: select %s: %w", acc.Name, imapName, err)
 	}
 
-	storedValidity, lastUID, err := st.SyncState(acc.Name, acc.Mailbox)
+	storedValidity, lastUID, err := st.SyncState(acc.Name, class_)
 	if err != nil {
 		return 0, err
 	}
 	// If UIDVALIDITY changed, the server's UIDs are no longer comparable — reset.
 	if storedValidity != 0 && storedValidity != sel.UIDValidity {
-		if err := st.ResetMailbox(acc.Name, acc.Mailbox); err != nil {
+		if err := st.ResetMailbox(acc.Name, class_); err != nil {
 			return 0, err
 		}
 		lastUID = 0
@@ -94,7 +186,7 @@ func Sync(st *store.Store, acc config.Account, fetchLimit, fetchSinceDays int) (
 	if lastUID > 0 {
 		set := imap.UIDSet{}
 		set.AddRange(imap.UID(lastUID+1), 0) // 0 == "*"
-		n, mx, err := fetchInsert(c, acc, st, set)
+		n, mx, err := fetchInsert(c, acc, st, class_, set)
 		if err != nil {
 			return inserted, fmt.Errorf("%s: fetch (forward): %w", acc.Name, err)
 		}
@@ -112,7 +204,7 @@ func Sync(st *store.Store, acc config.Account, fetchLimit, fetchSinceDays int) (
 		if err != nil {
 			return inserted, fmt.Errorf("%s: search since: %w", acc.Name, err)
 		}
-		stored, err := st.StoredUIDs(acc.Name, acc.Mailbox)
+		stored, err := st.StoredUIDs(acc.Name, class_)
 		if err != nil {
 			return inserted, err
 		}
@@ -131,7 +223,7 @@ func Sync(st *store.Store, acc config.Account, fetchLimit, fetchSinceDays int) (
 			for _, u := range missing[i:end] {
 				set.AddNum(u)
 			}
-			n, mx, err := fetchInsert(c, acc, st, set)
+			n, mx, err := fetchInsert(c, acc, st, class_, set)
 			if err != nil {
 				return inserted, fmt.Errorf("%s: fetch (window): %w", acc.Name, err)
 			}
@@ -144,7 +236,7 @@ func Sync(st *store.Store, acc config.Account, fetchLimit, fetchSinceDays int) (
 		// Count-based: pull older messages (by sequence) in chunks until we hold
 		// the newest fetchLimit, or the mailbox is exhausted.
 		for {
-			have, err := st.CountMessages(acc.Name, acc.Mailbox)
+			have, err := st.CountMessages(acc.Name, class_)
 			if err != nil {
 				return inserted, err
 			}
@@ -162,7 +254,7 @@ func Sync(st *store.Store, acc config.Account, fetchLimit, fetchSinceDays int) (
 			}
 			set := imap.SeqSet{}
 			set.AddRange(start, topOlder)
-			n, mx, err := fetchInsert(c, acc, st, set)
+			n, mx, err := fetchInsert(c, acc, st, class_, set)
 			if err != nil {
 				return inserted, fmt.Errorf("%s: fetch (backfill): %w", acc.Name, err)
 			}
@@ -176,7 +268,7 @@ func Sync(st *store.Store, acc config.Account, fetchLimit, fetchSinceDays int) (
 		}
 	}
 
-	if err := st.SetSyncState(acc.Name, acc.Mailbox, sel.UIDValidity, maxUID); err != nil {
+	if err := st.SetSyncState(acc.Name, class_, sel.UIDValidity, maxUID); err != nil {
 		return inserted, err
 	}
 	return inserted, nil
@@ -260,7 +352,7 @@ func FetchAttachment(acc config.Account, uid uint32, name string) ([]byte, strin
 
 // fetchInsert fetches a message set (read-only, BODY.PEEK) and inserts new rows.
 // Returns the number inserted and the highest UID seen.
-func fetchInsert(c *imapclient.Client, acc config.Account, st *store.Store, set imap.NumSet) (inserted int, maxUID uint32, err error) {
+func fetchInsert(c *imapclient.Client, acc config.Account, st *store.Store, class_ string, set imap.NumSet) (inserted int, maxUID uint32, err error) {
 	opts := &imap.FetchOptions{
 		UID:         true,
 		Envelope:    true,
@@ -272,7 +364,7 @@ func fetchInsert(c *imapclient.Client, acc config.Account, st *store.Store, set 
 		return 0, 0, err
 	}
 	for _, b := range buffers {
-		m := bufferToMessage(acc, b)
+		m := bufferToMessage(acc, class_, b)
 		if uint32(b.UID) > maxUID {
 			maxUID = uint32(b.UID)
 		}
@@ -321,10 +413,10 @@ func SetSeen(acc config.Account, uids []uint32, seen bool) error {
 	return nil
 }
 
-func bufferToMessage(acc config.Account, b *imapclient.FetchMessageBuffer) *store.Message {
+func bufferToMessage(acc config.Account, class_ string, b *imapclient.FetchMessageBuffer) *store.Message {
 	m := &store.Message{
 		Account: acc.Name,
-		Mailbox: acc.Mailbox,
+		Mailbox: class_,
 		UID:     uint32(b.UID),
 	}
 	for _, f := range b.Flags {

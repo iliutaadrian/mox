@@ -26,7 +26,11 @@ export type Filter =
   | { kind: "all" }
   | { kind: "account"; name: string }
   | { kind: "category"; name: string }
+  | { kind: "folder"; class: string } // Sent/Spam/Archive across accounts
   | { kind: "search"; query: string };
+
+// Folder classes stored in the mailbox column (match the Go side).
+export const FOLDER_CLASSES = ["Sent", "Spam", "Archive"] as const;
 
 const LIST_COLS = `id, account, COALESCE(from_name,'') AS from_name,
   COALESCE(from_addr,'') AS from_addr, COALESCE(subject,'') AS subject,
@@ -40,23 +44,28 @@ export class Store {
     this.db = new Database(path, { readonly: true });
   }
 
-  /** Messages for one sidebar entry, newest first. Uncategorized == ''. */
+  /** Messages for one sidebar entry, newest first. Uncategorized == ''.
+   * All/account/category views are INBOX-scoped; folders select by class. */
   list(f: Filter): MessageRow[] {
     switch (f.kind) {
       case "all":
         return this.db
-          .query(`SELECT ${LIST_COLS} FROM messages ORDER BY date DESC`)
+          .query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox = 'INBOX' ORDER BY date DESC`)
           .all() as MessageRow[];
       case "account":
         return this.db
-          .query(`SELECT ${LIST_COLS} FROM messages WHERE account = ? ORDER BY date DESC`)
+          .query(`SELECT ${LIST_COLS} FROM messages WHERE account = ? AND mailbox = 'INBOX' ORDER BY date DESC`)
           .all(f.name) as MessageRow[];
+      case "folder":
+        return this.db
+          .query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox = ? ORDER BY date DESC`)
+          .all(f.class) as MessageRow[];
       case "category": {
         const where =
           f.name === "Uncategorized"
-            ? "category IS NULL OR category = '' OR category = 'Uncategorized'"
+            ? "(category IS NULL OR category = '' OR category = 'Uncategorized')"
             : "category = ?";
-        const q = `SELECT ${LIST_COLS} FROM messages WHERE ${where} ORDER BY date DESC`;
+        const q = `SELECT ${LIST_COLS} FROM messages WHERE mailbox = 'INBOX' AND ${where} ORDER BY date DESC`;
         return (f.name === "Uncategorized"
           ? this.db.query(q).all()
           : this.db.query(q).all(f.name)) as MessageRow[];
@@ -91,12 +100,12 @@ export class Store {
   }
 
   totalCount(): number {
-    return (this.db.query("SELECT COUNT(*) AS n FROM messages").get() as any).n;
+    return (this.db.query("SELECT COUNT(*) AS n FROM messages WHERE mailbox = 'INBOX'").get() as any).n;
   }
 
   accountCounts(): Map<string, number> {
     const rows = this.db
-      .query("SELECT account, COUNT(*) AS n FROM messages GROUP BY account")
+      .query("SELECT account, COUNT(*) AS n FROM messages WHERE mailbox = 'INBOX' GROUP BY account")
       .all() as { account: string; n: number }[];
     return new Map(rows.map((r) => [r.account, r.n]));
   }
@@ -105,10 +114,21 @@ export class Store {
     const rows = this.db
       .query(
         `SELECT COALESCE(NULLIF(category,''),'Uncategorized') AS c, COUNT(*) AS n
-         FROM messages GROUP BY c`,
+         FROM messages WHERE mailbox = 'INBOX' GROUP BY c`,
       )
       .all() as { c: string; n: number }[];
     return new Map(rows.map((r) => [r.c, r.n]));
+  }
+
+  /** Counts for folder classes (Sent/Spam/Archive) across all accounts. */
+  folderCounts(): Map<string, number> {
+    const rows = this.db
+      .query(
+        `SELECT mailbox, COUNT(*) AS n FROM messages
+         WHERE mailbox IN ('Sent','Spam','Archive') GROUP BY mailbox`,
+      )
+      .all() as { mailbox: string; n: number }[];
+    return new Map(rows.map((r) => [r.mailbox, r.n]));
   }
 
   approvedCategories(): string[] {

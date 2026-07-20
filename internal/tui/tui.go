@@ -75,10 +75,11 @@ const (
 type sideKind int
 
 const (
-	kindAll      sideKind = iota // the "All" view (every mailbox)
-	kindHeader                   // a non-selectable section label ("Mailboxes"/"Manual"/"AI")
-	kindMailbox                  // one account: all of its mail, any category
+	kindAll      sideKind = iota // the "All" view (every INBOX)
+	kindHeader                   // a non-selectable section label ("Mailboxes"/"Manual"/…)
+	kindMailbox                  // one account's INBOX
 	kindCategory                 // a real bucket (category, Suggested, Uncategorized)
+	kindFolder                   // a folder class across accounts (Sent/Spam/Archive)
 )
 
 type sideEntry struct {
@@ -116,9 +117,11 @@ type model struct {
 	dbPath  string
 
 	msgs      []store.Message
+	inbox     []store.Message            // INBOX messages only (the "All" view)
 	side      []sideEntry                // ordered sidebar rows (incl. headers + All)
-	groups    map[string][]store.Message // category bucket name -> messages
-	byAccount map[string][]store.Message // account name -> messages
+	groups    map[string][]store.Message // category bucket name -> INBOX messages
+	byAccount map[string][]store.Message // account name -> its INBOX messages
+	folders   map[string][]store.Message // folder class (Sent/Spam/Archive) -> messages
 
 	catIdx int // index into side (always points at a selectable row)
 	msgIdx int
@@ -166,9 +169,21 @@ func (m *model) reload() {
 	}
 	m.msgs = msgs
 
+	// Categories and the account/All views cover the INBOX only. Sent/Spam/
+	// Archive live in their own folder buckets so they don't pollute category
+	// counts or the inbox.
 	groups := map[string][]store.Message{}
 	byAccount := map[string][]store.Message{}
+	folders := map[string][]store.Message{}
+	var inbox []store.Message
 	for _, msg := range msgs {
+		switch msg.Mailbox {
+		case mail.ClassSent, mail.ClassSpam, mail.ClassArchive:
+			folders[msg.Mailbox] = append(folders[msg.Mailbox], msg)
+			continue
+		}
+		// INBOX (or legacy empty mailbox).
+		inbox = append(inbox, msg)
 		key := msg.Category
 		if key == "" {
 			key = store.Uncategorized
@@ -176,8 +191,10 @@ func (m *model) reload() {
 		groups[key] = append(groups[key], msg)
 		byAccount[msg.Account] = append(byAccount[msg.Account], msg)
 	}
+	m.inbox = inbox
 	m.groups = groups
 	m.byAccount = byAccount
+	m.folders = folders
 
 	// Split configured categories into manual (rule-based) and other buckets,
 	// keeping only those that currently hold mail.
@@ -238,6 +255,17 @@ func (m *model) reload() {
 			side = append(side, sideEntry{kind: kindCategory, name: n})
 		}
 	}
+	// Folder views (Sent/Spam/Archive) span all accounts, shown when populated.
+	var folderRows []sideEntry
+	for _, class := range []string{mail.ClassSent, mail.ClassSpam, mail.ClassArchive} {
+		if len(folders[class]) > 0 {
+			folderRows = append(folderRows, sideEntry{kind: kindFolder, name: class})
+		}
+	}
+	if len(folderRows) > 0 {
+		side = append(side, sideEntry{kind: kindHeader, name: "Folders"})
+		side = append(side, folderRows...)
+	}
 	m.side = side
 
 	// Keep catIdx on a selectable row.
@@ -295,9 +323,11 @@ func (m *model) currentMessages() []store.Message {
 	e := m.currentEntry()
 	switch e.kind {
 	case kindAll:
-		return m.msgs
+		return m.inbox
 	case kindMailbox:
 		return m.byAccount[e.name]
+	case kindFolder:
+		return m.folders[e.name]
 	default:
 		return m.groups[e.name]
 	}
@@ -898,13 +928,16 @@ func (m *model) renderSidebar(h int) string {
 		case kindHeader:
 			lines = append(lines, headerStyle.Render(fit("── "+e.name+" ", sidebarWidth-2)))
 		case kindAll:
-			label := fmt.Sprintf("All (%d)", len(m.msgs))
+			label := fmt.Sprintf("All (%d)", len(m.inbox))
 			lines = append(lines, sideLabel(label, i == m.catIdx))
 		case kindMailbox:
 			label := fmt.Sprintf("%s (%d)", e.name, len(m.byAccount[e.name]))
 			lines = append(lines, sideLabel(label, i == m.catIdx))
 		case kindCategory:
 			label := fmt.Sprintf("%s (%d)", e.name, len(m.groups[e.name]))
+			lines = append(lines, sideLabel(label, i == m.catIdx))
+		case kindFolder:
+			label := fmt.Sprintf("%s (%d)", e.name, len(m.folders[e.name]))
 			lines = append(lines, sideLabel(label, i == m.catIdx))
 		}
 	}
