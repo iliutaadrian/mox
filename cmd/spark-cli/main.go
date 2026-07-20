@@ -34,6 +34,9 @@ func run() error {
 	mark := flag.String("mark", "", "mark -ids read|unread on the server, then exit")
 	move := flag.String("move", "", "move -ids to this category (manual), then exit")
 	idsCSV := flag.String("ids", "", "comma-separated local db message ids for -mark/-move")
+	attach := flag.Bool("attach", false, "download an attachment from -ids (single id) over IMAP to -out, then exit")
+	attachName := flag.String("name", "", "attachment filename for -attach (optional if the message has exactly one)")
+	outDir := flag.String("out", ".", "output directory for -attach")
 	flag.Parse()
 
 	// Load secrets from a .env file alongside the config (e.g. OPENAI_API_KEY).
@@ -112,9 +115,69 @@ func run() error {
 		}
 		fmt.Printf("moved=%d\n", len(ids))
 		return nil
+	case *attach:
+		ids, err := parseIDs(*idsCSV)
+		if err != nil {
+			return err
+		}
+		if len(ids) != 1 {
+			return fmt.Errorf("-attach takes exactly one -ids value")
+		}
+		path, err := downloadAttachment(st, cfg, ids[0], *attachName, *outDir)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("saved %s\n", path)
+		return nil
 	}
 
 	return tui.Run(st, cfg, *cfgPath)
+}
+
+// downloadAttachment re-fetches the message's named attachment over IMAP (never
+// stored locally) and writes it into outDir. Returns the written path.
+func downloadAttachment(st *store.Store, cfg *config.Config, id int64, name, outDir string) (string, error) {
+	msgs, err := st.All()
+	if err != nil {
+		return "", err
+	}
+	var msg *store.Message
+	for i := range msgs {
+		if msgs[i].ID == id {
+			msg = &msgs[i]
+			break
+		}
+	}
+	if msg == nil {
+		return "", fmt.Errorf("unknown id %d", id)
+	}
+	var acc *config.Account
+	for i := range cfg.Accounts {
+		if cfg.Accounts[i].Name == msg.Account {
+			acc = &cfg.Accounts[i]
+		}
+	}
+	if acc == nil {
+		return "", fmt.Errorf("account %q not in config", msg.Account)
+	}
+	data, fn, err := mail.FetchAttachment(*acc, msg.UID, name)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return "", err
+	}
+	safe := strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' {
+			return '-'
+		}
+		return r
+	}, fn)
+	path := filepath.Join(outDir, safe)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func parseIDs(csv string) ([]int64, error) {

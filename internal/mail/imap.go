@@ -58,6 +58,7 @@ func dial(acc config.Account) (*imapclient.Client, error) {
 //     window, fetching only UIDs not already stored (resumable, no re-download), or
 //   - count-based (otherwise): progressively older mail until the local count
 //     reaches fetchLimit.
+//
 // Either way, raising the limit/window and re-running grows the corpus WITHOUT
 // wiping the database. Strictly read-only: EXAMINE + BODY.PEEK, nothing on the
 // server changes.
@@ -179,6 +180,82 @@ func Sync(st *store.Store, acc config.Account, fetchLimit, fetchSinceDays int) (
 		return inserted, err
 	}
 	return inserted, nil
+}
+
+// FetchAttachment re-fetches one message by UID (read-only, BODY.PEEK) and
+// returns the bytes of the attachment whose filename matches name. Attachment
+// files are never stored locally — this pulls them on demand. If name is empty
+// and the message has exactly one attachment, that one is returned. The second
+// return is the matched filename (useful when name was empty).
+func FetchAttachment(acc config.Account, uid uint32, name string) ([]byte, string, error) {
+	c, err := dial(acc)
+	if err != nil {
+		return nil, "", err
+	}
+	defer c.Close()
+	defer func() { c.Logout().Wait() }()
+
+	if _, err := c.Select(acc.Mailbox, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
+		return nil, "", fmt.Errorf("%s: select %s: %w", acc.Name, acc.Mailbox, err)
+	}
+	set := imap.UIDSet{}
+	set.AddNum(imap.UID(uid))
+	opts := &imap.FetchOptions{
+		UID:         true,
+		BodySection: []*imap.FetchItemBodySection{{Peek: true}},
+	}
+	buffers, err := c.Fetch(set, opts).Collect()
+	if err != nil {
+		return nil, "", err
+	}
+	if len(buffers) == 0 {
+		return nil, "", fmt.Errorf("uid %d not found in %s", uid, acc.Name)
+	}
+	raw := firstBody(buffers[0])
+	if raw == nil {
+		return nil, "", fmt.Errorf("empty body for uid %d", uid)
+	}
+
+	mr, err := mail.CreateReader(bytes.NewReader(raw))
+	if err != nil {
+		return nil, "", err
+	}
+	var only []byte
+	var onlyName string
+	count := 0
+	for {
+		p, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break
+		}
+		h, ok := p.Header.(*mail.AttachmentHeader)
+		if !ok {
+			continue
+		}
+		fn, _ := h.Filename()
+		data, err := io.ReadAll(p.Body)
+		if err != nil {
+			return nil, "", err
+		}
+		if name != "" && fn == name {
+			return data, fn, nil
+		}
+		count++
+		only, onlyName = data, fn
+	}
+	switch {
+	case name != "":
+		return nil, "", fmt.Errorf("attachment %q not found on message", name)
+	case count == 1:
+		return only, onlyName, nil
+	case count == 0:
+		return nil, "", fmt.Errorf("message has no attachments")
+	default:
+		return nil, "", fmt.Errorf("message has %d attachments; pass -name to pick one", count)
+	}
 }
 
 // fetchInsert fetches a message set (read-only, BODY.PEEK) and inserts new rows.
