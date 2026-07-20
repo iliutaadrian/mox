@@ -25,7 +25,8 @@ want. No API keys or environment variables required.
   rules in `config.yaml` or in-app (`A`).
 - **Full-text search** (`/`) over subject, sender, body.
 - **Mouse**: click to select, wheel to scroll.
-- **Email preview** (`i`): renders HTML via `lynx` → text, paged in `bat` (themed).
+- **HTML rendered on open**: opening an email shows it as readable text (`lynx`) right in the reading pane.
+- **Pager** (`i`): the same rendering in `bat` (paged, themed) for long mail.
 - **Open URLs** (`u`): pick any link in the message and open it in the browser.
 - **Three-pane TUI**: category sidebar │ message list │ reading pane.
 

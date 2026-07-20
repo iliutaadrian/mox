@@ -78,6 +78,21 @@ function filterOf(e: SideEntry): Filter {
   return { kind: "all" };
 }
 
+// Render an email to display text: lynx flows the HTML (layout tables → text,
+// links as [N] refs); plain-text body otherwise. Runs once per open (cached).
+function renderEmailBody(html: string, body: string, width: number): string {
+  if (html.trim()) {
+    const l = spawnSync(
+      "lynx",
+      ["-dump", "-force_html", "-nomargins", `-width=${Math.max(40, width)}`, "-assume_charset=utf-8", "-display_charset=utf-8", "-stdin"],
+      { input: html, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    );
+    if (l.status === 0 && l.stdout.trim()) return l.stdout;
+    if (!body.trim()) return html.replace(/<[^>]+>/g, " ").replace(/\s+\n/g, "\n");
+  }
+  return body;
+}
+
 function nextSelectable(entries: SideEntry[], idx: number, dir: 1 | -1): number {
   let i = idx + dir;
   while (i >= 0 && i < entries.length) {
@@ -143,6 +158,17 @@ export function App({
 
   const bodyH = Math.max(3, size.rows - 4);
   const listW = Math.max(16, size.cols - SIDEBAR_W - 4);
+
+  // Lynx-render the opened email once (cached by id+width) so it's shown
+  // automatically in the reading pane; scrolling doesn't re-run lynx.
+  const renderCache = useRef(new Map<string, string>());
+  const readingBody = useMemo(() => {
+    if (!opened) return "";
+    const key = `${opened.id}:${listW}`;
+    const cache = renderCache.current;
+    if (!cache.has(key)) cache.set(key, renderEmailBody(opened.html, opened.body, listW));
+    return cache.get(key)!;
+  }, [opened, listW]);
 
   // Move the cursor immediately (no throttle — throttling made held keys feel
   // laggy). Synchronized-output frames keep rapid moves from tearing.
@@ -479,7 +505,7 @@ export function App({
           overflow="hidden"
         >
           {mode === "reading" && opened ? (
-            <Reading opened={opened} scroll={scroll} w={listW} h={bodyH} />
+            <Reading opened={opened} body={readingBody} scroll={scroll} w={listW} h={bodyH} />
           ) : msgs.length === 0 ? (
             <Text color={DIM}>{search !== null ? `no matches for "${search}"` : "(empty)"}</Text>
           ) : (
@@ -559,7 +585,7 @@ export function App({
   );
 }
 
-function Reading({ opened, scroll, w, h }: { opened: NonNullable<ReturnType<Store["full"]>>; scroll: number; w: number; h: number }) {
+function Reading({ opened, body: bodyText, scroll, w, h }: { opened: NonNullable<ReturnType<Store["full"]>>; body: string; scroll: number; w: number; h: number }) {
   const atts: { name: string; type: string; size: number }[] = opened.attachments
     ? JSON.parse(opened.attachments)
     : [];
@@ -569,12 +595,12 @@ function Reading({ opened, scroll, w, h }: { opened: NonNullable<ReturnType<Stor
     `Subject: ${oneLine(opened.subject)}`,
     `Date:    ${new Date(opened.date * 1000).toLocaleString("en-GB")}`,
     `Category: ${opened.category || "Uncategorized"}${opened.source ? `  [${opened.source}]` : ""}`,
-    ...(opened.html.trim() ? ["HTML email — press v to open it in your browser"] : []),
+    ...(opened.html.trim() ? ["HTML email — v browser · u urls · i pager"] : []),
     ...atts.map((a) => `📎 ${a.name}  ${a.type}  ${(a.size / 1024).toFixed(0)} KB`),
     "─".repeat(Math.max(10, w)),
     "",
   ];
-  const body = (opened.body || "").split("\n").map((l) => oneLine(l));
+  const body = (bodyText || "").split("\n").map((l) => oneLine(l));
   const lines = [...head, ...body].slice(scroll, scroll + h);
   return (
     <>
