@@ -24,8 +24,13 @@ process.stdout.write("\x1b[?1049h\x1b[H");
 const restore = () => process.stdout.write("\x1b[?1049l");
 process.on("exit", restore);
 
-const app = render(<App repoRoot={repoRoot} dbPath={dbPath} cfgPath={cfgPath} />, {
-  exitOnCtrlC: true,
-});
+// forceClear lets the app drop Ink's cached frame after a child process (the
+// inline previewer) has painted over the screen, so the next render is full.
+const holder: { clear: () => void } = { clear: () => {} };
+const app = render(
+  <App repoRoot={repoRoot} dbPath={dbPath} cfgPath={cfgPath} forceClear={() => holder.clear()} />,
+  { exitOnCtrlC: true },
+);
+holder.clear = app.clear;
 await app.waitUntilExit();
 restore();

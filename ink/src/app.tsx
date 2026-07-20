@@ -3,8 +3,8 @@
 // message list, reading view. Reads sqlite directly; every write shells out to
 // the Go binary. Filing is by sender rules only — no AI classification.
 import React, { useEffect, useMemo, useState } from "react";
-import { Box, Text, useApp, useInput, useStdout } from "ink";
-import { spawn } from "node:child_process";
+import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
+import { spawn, spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,9 +76,20 @@ function nextSelectable(entries: SideEntry[], idx: number, dir: 1 | -1): number 
   return idx;
 }
 
-export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: string; cfgPath: string }) {
+export function App({
+  repoRoot,
+  dbPath,
+  cfgPath,
+  forceClear,
+}: {
+  repoRoot: string;
+  dbPath: string;
+  cfgPath: string;
+  forceClear: () => void;
+}) {
   const { exit } = useApp();
   const { stdout } = useStdout();
+  const { setRawMode, stdin } = useStdin();
   const be = useMemo(() => backend(repoRoot), [repoRoot]);
   const store = useMemo(() => new Store(dbPath), [dbPath]);
   const cfg = useMemo(() => loadConfig(cfgPath), [cfgPath]);
@@ -103,6 +114,7 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
   const [search, setSearch] = useState<string | null>(null); // committed query
   const [typing, setTyping] = useState(false); // search input active
   const [draft, setDraft] = useState("");
+  const [blank, setBlank] = useState(false); // one-frame blank to force full repaint
 
   const entries = useMemo(() => buildSidebar(store, cfg), [store, cfg, version]);
   const safeCatIdx = Math.min(catIdx, entries.length - 1);
@@ -147,6 +159,31 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
     writeFileSync(p, doc);
     spawn("open", [p], { stdio: "ignore", detached: true }).unref();
     setStatus("Opened HTML in browser");
+  }
+
+  // Render the real email inline (Chrome → PNG → chafa). spawnSync blocks Ink's
+  // JS so the previewer owns the terminal until a key is pressed; then we force
+  // a repaint. Best inline images in Ghostty; falls back to blocks elsewhere.
+  function previewInline() {
+    if (!current) return;
+    const child = spawnSync(process.execPath, [join(repoRoot, "ink/src/preview.ts"), dbPath, String(current.id)], {
+      stdio: "inherit",
+    });
+    if (child.status !== 0) setStatus("preview failed (need chafa + Chrome)");
+    // The child shared our tty and left raw mode off; re-assert it and resume
+    // stdin so Ink keeps receiving keys. Defer the clear + repaint one tick so
+    // it runs after this input handler unwinds (an immediate clear races Ink's
+    // render and leaves a blank frame until the next keypress).
+    setRawMode(true);
+    stdin?.resume();
+    // Force a full repaint: the child overwrote the screen but Ink's line-diff
+    // still holds the pre-preview frame, so it would write nothing. Render one
+    // blank frame (differs from the cached UI → clears leftover graphics), then
+    // the real UI (differs from blank → full redraw).
+    forceClear();
+    setBlank(true);
+    setVersion((v) => v + 1);
+    setTimeout(() => setBlank(false), 30);
   }
 
   useInput((input, key) => {
@@ -195,6 +232,7 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
       } else if (key.ctrl && input === "d") setScroll((s) => s + Math.floor(bodyH / 2));
       else if (key.ctrl && input === "u") setScroll((s) => Math.max(0, s - Math.floor(bodyH / 2)));
       else if (input === "v") openInBrowser();
+      else if (input === "i") previewInline();
       else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
       else if (input === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
       return;
@@ -235,6 +273,7 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
       const cats = [...new Set([...cfg.categories.map((c) => c.name), ...store.approvedCategories()])];
       if (cats.length > 0) setPicker({ options: cats, idx: 0 });
     } else if (input === "v") openInBrowser();
+    else if (input === "i") previewInline();
   });
 
   // ----- render -----
@@ -299,14 +338,20 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
 
   const hint =
     mode === "reading"
-      ? "j/k next/prev · ctrl+u/d scroll · v html · M/U read/unread · esc/q back"
-      : `enter open · / search · space select · r refresh · m move · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
+      ? "j/k next/prev · ctrl+u/d scroll · i preview · v html · M/U read/unread · esc/q back"
+      : `enter open · i preview · / search · space select · r refresh · m move · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
 
   const headerNote = typing
     ? `  /${draft}▏`
     : search !== null
       ? `  search: "${search}" (${msgs.length}) · esc clear`
       : "  " + status;
+
+  if (blank) {
+    // One deliberately-blank frame to clear leftover previewer graphics before
+    // the real UI repaints (see previewInline).
+    return <Box width={size.cols} height={size.rows} flexDirection="column" />;
+  }
 
   return (
     <Box flexDirection="column" width={size.cols} height={size.rows}>
