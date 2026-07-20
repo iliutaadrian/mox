@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Store, FOLDER_CLASSES, type Filter, type MessageRow } from "./db.ts";
-import { loadConfig, type Config } from "./config.ts";
+import { loadConfig, categoryHasRules, type Config } from "./config.ts";
 import { backend } from "./backend.ts";
 import { fit, oneLine } from "./text.ts";
 import { useMouse, isMouseSeq } from "./mouse.ts";
@@ -33,14 +33,14 @@ function buildSidebar(store: Store, cfg: Config): SideEntry[] {
   const catCounts = store.categoryCounts();
   const entries: SideEntry[] = [{ kind: "all", label: `All (${store.totalCount()})` }];
 
-  const accounts = cfg.accounts.filter((a) => (accCounts.get(a) ?? 0) > 0);
+  const accounts = cfg.accounts.map((a) => a.name).filter((n) => (accCounts.get(n) ?? 0) > 0);
   if (accounts.length > 1) {
     entries.push({ kind: "header", label: "Mailboxes" });
     for (const a of accounts)
       entries.push({ kind: "account", name: a, label: `${a} (${accCounts.get(a)})` });
   }
 
-  const manual = cfg.categories.filter((c) => c.hasRules && (catCounts.get(c.name) ?? 0) > 0);
+  const manual = cfg.categories.filter((c) => categoryHasRules(c) && (catCounts.get(c.name) ?? 0) > 0);
   if (manual.length > 0) {
     entries.push({ kind: "header", label: "Manual" });
     for (const c of manual)
@@ -48,7 +48,7 @@ function buildSidebar(store: Store, cfg: Config): SideEntry[] {
   }
 
   const aiNames = new Set<string>();
-  for (const c of cfg.categories) if (!c.hasRules && (catCounts.get(c.name) ?? 0) > 0) aiNames.add(c.name);
+  for (const c of cfg.categories) if (!categoryHasRules(c) && (catCounts.get(c.name) ?? 0) > 0) aiNames.add(c.name);
   for (const c of store.approvedCategories())
     if ((catCounts.get(c) ?? 0) > 0 && !manual.some((m) => m.name === c)) aiNames.add(c);
   const ai = [...aiNames];
@@ -100,9 +100,9 @@ export function App({
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { setRawMode, stdin } = useStdin();
-  const be = useMemo(() => backend(repoRoot), [repoRoot]);
   const store = useMemo(() => new Store(dbPath), [dbPath]);
-  const cfg = useMemo(() => loadConfig(cfgPath), [cfgPath]);
+  const [cfg, setCfg] = useState<Config>(() => loadConfig(cfgPath));
+  const be = useMemo(() => backend(store, cfg, cfgPath), [store, cfg, cfgPath]);
 
   const [size, setSize] = useState({ cols: stdout.columns, rows: stdout.rows });
   useEffect(() => {
@@ -120,7 +120,7 @@ export function App({
   const [status, setStatus] = useState("Press r to fetch new mail");
   const [busy, setBusy] = useState(false);
   const [scroll, setScroll] = useState(0);
-  const [picker, setPicker] = useState<{ options: string[]; idx: number } | null>(null);
+  const [picker, setPicker] = useState<{ kind: "move" | "rule"; options: string[]; idx: number } | null>(null);
   const [search, setSearch] = useState<string | null>(null); // committed query
   const [typing, setTyping] = useState(false); // search input active
   const [draft, setDraft] = useState("");
@@ -144,12 +144,11 @@ export function App({
   const targets = (): number[] =>
     selected.size > 0 ? [...selected] : current ? [current.id] : [];
 
-  async function doBackend(label: string, fn: () => Promise<{ ok: boolean; out: string }>) {
+  async function doBackend(label: string, fn: () => { ok: boolean; out: string } | Promise<{ ok: boolean; out: string }>) {
     if (busy) return;
     setBusy(true);
     setStatus(label + "…");
     const r = await fn();
-    store.reopen(dbPath);
     setSelected(new Set());
     setVersion((v) => v + 1);
     setStatus(r.ok ? r.out : `error: ${r.out.slice(0, 120)}`);
@@ -223,8 +222,17 @@ export function App({
       else if (key.return) {
         const cat = picker.options[picker.idx]!;
         const ids = targets();
+        const kind = picker.kind;
         setPicker(null);
-        void doBackend(`Moving ${ids.length} to ${cat}`, () => be.move(ids, cat));
+        if (kind === "move") {
+          void doBackend(`Moving ${ids.length} to ${cat}`, () => be.move(ids, cat));
+        } else {
+          const { res, cfg: reloaded } = be.rule(ids, cat);
+          if (reloaded) setCfg(reloaded);
+          setSelected(new Set());
+          setVersion((v) => v + 1);
+          setStatus(res.ok ? res.out : `error: ${res.out.slice(0, 120)}`);
+        }
       }
       return;
     }
@@ -279,9 +287,9 @@ export function App({
     else if (input === "r") void doBackend("Fetching new mail", () => be.sync());
     else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
     else if (input === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
-    else if (input === "m" && targets().length > 0) {
+    else if ((input === "m" || input === "A") && targets().length > 0) {
       const cats = [...new Set([...cfg.categories.map((c) => c.name), ...store.approvedCategories()])];
-      if (cats.length > 0) setPicker({ options: cats, idx: 0 });
+      if (cats.length > 0) setPicker({ kind: input === "A" ? "rule" : "move", options: cats, idx: 0 });
     } else if (input === "v") openInBrowser();
     else if (input === "i") previewInline();
   });
@@ -349,7 +357,7 @@ export function App({
   const hint =
     mode === "reading"
       ? "j/k next/prev · ctrl+u/d scroll · i preview · v html · M/U read/unread · esc/q back"
-      : `enter open · i preview · / search · space select · r refresh · m move · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
+      : `enter open · i preview · / search · space select · r refresh · m move · A rule · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
 
   const headerNote = typing
     ? `  /${draft}▏`
@@ -459,7 +467,7 @@ export function App({
           paddingY={1}
         >
           <Text color={PINK} bold>
-            Move {targets().length} email(s) to:
+            {picker.kind === "rule" ? "Sender rule → category" : "Move"} ({targets().length} email(s)):
           </Text>
           {picker.options.map((o, i) => (
             <Text key={o} backgroundColor={i === picker.idx ? PINK : undefined} color={i === picker.idx ? "black" : undefined}>

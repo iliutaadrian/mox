@@ -1,11 +1,26 @@
-// Read-only data layer over the Go app's sqlite db. All WRITES go through the
-// Go binary (-mark/-move/-reclassify/-sync) so there is exactly one writer
-// implementation; this module never opens the db writable.
+// Local SQLite store (bun:sqlite). Holds fetched messages + their local-only
+// category. Ported from the former Go internal/store. The category lives ONLY
+// here — never written back to the mail server. Read AND write (the TUI does
+// everything in-process now; there is no separate backend binary).
 import { Database } from "bun:sqlite";
+
+export const UNCATEGORIZED = "Uncategorized";
+export const SUGGESTED = "Suggested";
+export const CLASS_INBOX = "INBOX";
+export const CLASS_SENT = "Sent";
+export const CLASS_SPAM = "Spam";
+export const CLASS_ARCHIVE = "Archive";
+export const FOLDER_CLASSES = [CLASS_SENT, CLASS_SPAM, CLASS_ARCHIVE] as const;
+
+export const SOURCE_RULE = "rule";
+export const SOURCE_MANUAL = "manual";
+
+export type Attachment = { name: string; type: string; size: number };
 
 export type MessageRow = {
   id: number;
   account: string;
+  mailbox: string;
   from_name: string;
   from_addr: string;
   subject: string;
@@ -16,23 +31,38 @@ export type MessageRow = {
 };
 
 export type MessageFull = MessageRow & {
+  uid: number;
   body: string;
   html: string;
-  attachments: string; // JSON array of {name,type,size}
+  attachments: string; // JSON array
   source: string;
+};
+
+// A message to insert (fetched from IMAP).
+export type NewMessage = {
+  account: string;
+  mailbox: string;
+  uid: number;
+  messageId: string;
+  fromAddr: string;
+  fromName: string;
+  subject: string;
+  date: number; // unix seconds
+  snippet: string;
+  body: string;
+  html: string;
+  attachments: Attachment[];
+  seen: boolean;
 };
 
 export type Filter =
   | { kind: "all" }
   | { kind: "account"; name: string }
   | { kind: "category"; name: string }
-  | { kind: "folder"; class: string } // Sent/Spam/Archive across accounts
+  | { kind: "folder"; class: string }
   | { kind: "search"; query: string };
 
-// Folder classes stored in the mailbox column (match the Go side).
-export const FOLDER_CLASSES = ["Sent", "Spam", "Archive"] as const;
-
-const LIST_COLS = `id, account, COALESCE(from_name,'') AS from_name,
+const LIST_COLS = `id, account, mailbox, COALESCE(from_name,'') AS from_name,
   COALESCE(from_addr,'') AS from_addr, COALESCE(subject,'') AS subject,
   date, seen, COALESCE(category,'') AS category,
   COALESCE(suggested_new,'') AS suggested_new`;
@@ -41,107 +71,180 @@ export class Store {
   private db: Database;
 
   constructor(path: string) {
-    this.db = new Database(path, { readonly: true });
+    this.db = new Database(path, { create: true });
+    this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA busy_timeout = 5000");
+    this.migrate();
   }
 
-  /** Messages for one sidebar entry, newest first. Uncategorized == ''.
-   * All/account/category views are INBOX-scoped; folders select by class. */
+  private migrate() {
+    this.db.exec(`
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account TEXT NOT NULL, mailbox TEXT NOT NULL, uid INTEGER NOT NULL,
+  message_id TEXT, from_addr TEXT, from_name TEXT, subject TEXT, date INTEGER,
+  snippet TEXT, body TEXT, html TEXT, attachments TEXT,
+  seen INTEGER NOT NULL DEFAULT 0,
+  category TEXT, confidence TEXT, suggested_new TEXT, source TEXT, classified_at INTEGER,
+  UNIQUE(account, mailbox, uid)
+);
+CREATE INDEX IF NOT EXISTS idx_messages_category ON messages(category);
+CREATE TABLE IF NOT EXISTS sync_state (
+  account TEXT NOT NULL, mailbox TEXT NOT NULL,
+  uid_validity INTEGER NOT NULL DEFAULT 0, last_uid INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(account, mailbox)
+);
+CREATE TABLE IF NOT EXISTS approved_categories (
+  name TEXT PRIMARY KEY, description TEXT, created_at INTEGER
+);`);
+  }
+
+  close() {
+    this.db.close();
+  }
+
+  // ---- reads (TUI) ----
+
   list(f: Filter): MessageRow[] {
     switch (f.kind) {
       case "all":
-        return this.db
-          .query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox = 'INBOX' ORDER BY date DESC`)
-          .all() as MessageRow[];
+        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' ORDER BY date DESC`).all() as MessageRow[];
       case "account":
-        return this.db
-          .query(`SELECT ${LIST_COLS} FROM messages WHERE account = ? AND mailbox = 'INBOX' ORDER BY date DESC`)
-          .all(f.name) as MessageRow[];
+        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE account=? AND mailbox='INBOX' ORDER BY date DESC`).all(f.name) as MessageRow[];
       case "folder":
-        return this.db
-          .query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox = ? ORDER BY date DESC`)
-          .all(f.class) as MessageRow[];
+        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox=? ORDER BY date DESC`).all(f.class) as MessageRow[];
       case "category": {
-        const where =
-          f.name === "Uncategorized"
-            ? "(category IS NULL OR category = '' OR category = 'Uncategorized')"
-            : "category = ?";
-        const q = `SELECT ${LIST_COLS} FROM messages WHERE mailbox = 'INBOX' AND ${where} ORDER BY date DESC`;
-        return (f.name === "Uncategorized"
-          ? this.db.query(q).all()
-          : this.db.query(q).all(f.name)) as MessageRow[];
+        const where = f.name === UNCATEGORIZED
+          ? "(category IS NULL OR category='' OR category='Uncategorized')"
+          : "category=?";
+        const q = `SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' AND ${where} ORDER BY date DESC`;
+        return (f.name === UNCATEGORIZED ? this.db.query(q).all() : this.db.query(q).all(f.name)) as MessageRow[];
       }
       case "search": {
-        // Case-insensitive substring over subject, sender, and body. Empty
-        // query returns nothing (caller shows a prompt instead).
         if (!f.query.trim()) return [];
         const like = `%${f.query.replace(/[%_]/g, (c) => "\\" + c)}%`;
-        return this.db
-          .query(
-            `SELECT ${LIST_COLS} FROM messages
-             WHERE subject LIKE ?1 ESCAPE '\\'
-                OR from_name LIKE ?1 ESCAPE '\\'
-                OR from_addr LIKE ?1 ESCAPE '\\'
-                OR body LIKE ?1 ESCAPE '\\'
-             ORDER BY date DESC LIMIT 2000`,
-          )
-          .all(like) as MessageRow[];
+        return this.db.query(
+          `SELECT ${LIST_COLS} FROM messages
+           WHERE subject LIKE ?1 ESCAPE '\\' OR from_name LIKE ?1 ESCAPE '\\'
+              OR from_addr LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\'
+           ORDER BY date DESC LIMIT 2000`,
+        ).all(like) as MessageRow[];
       }
     }
   }
 
   full(id: number): MessageFull | null {
-    return this.db
-      .query(
-        `SELECT ${LIST_COLS}, COALESCE(body,'') AS body, COALESCE(html,'') AS html,
-         COALESCE(attachments,'') AS attachments, COALESCE(source,'') AS source
-         FROM messages WHERE id = ?`,
-      )
-      .get(id) as MessageFull | null;
+    return this.db.query(
+      `SELECT ${LIST_COLS}, uid, COALESCE(body,'') AS body, COALESCE(html,'') AS html,
+       COALESCE(attachments,'') AS attachments, COALESCE(source,'') AS source
+       FROM messages WHERE id=?`,
+    ).get(id) as MessageFull | null;
   }
 
   totalCount(): number {
-    return (this.db.query("SELECT COUNT(*) AS n FROM messages WHERE mailbox = 'INBOX'").get() as any).n;
+    return (this.db.query("SELECT COUNT(*) AS n FROM messages WHERE mailbox='INBOX'").get() as any).n;
   }
 
   accountCounts(): Map<string, number> {
-    const rows = this.db
-      .query("SELECT account, COUNT(*) AS n FROM messages WHERE mailbox = 'INBOX' GROUP BY account")
-      .all() as { account: string; n: number }[];
+    const rows = this.db.query("SELECT account, COUNT(*) AS n FROM messages WHERE mailbox='INBOX' GROUP BY account").all() as { account: string; n: number }[];
     return new Map(rows.map((r) => [r.account, r.n]));
   }
 
   categoryCounts(): Map<string, number> {
-    const rows = this.db
-      .query(
-        `SELECT COALESCE(NULLIF(category,''),'Uncategorized') AS c, COUNT(*) AS n
-         FROM messages WHERE mailbox = 'INBOX' GROUP BY c`,
-      )
-      .all() as { c: string; n: number }[];
+    const rows = this.db.query(
+      `SELECT COALESCE(NULLIF(category,''),'Uncategorized') AS c, COUNT(*) AS n
+       FROM messages WHERE mailbox='INBOX' GROUP BY c`,
+    ).all() as { c: string; n: number }[];
     return new Map(rows.map((r) => [r.c, r.n]));
   }
 
-  /** Counts for folder classes (Sent/Spam/Archive) across all accounts. */
   folderCounts(): Map<string, number> {
-    const rows = this.db
-      .query(
-        `SELECT mailbox, COUNT(*) AS n FROM messages
-         WHERE mailbox IN ('Sent','Spam','Archive') GROUP BY mailbox`,
-      )
-      .all() as { mailbox: string; n: number }[];
+    const rows = this.db.query(
+      `SELECT mailbox, COUNT(*) AS n FROM messages WHERE mailbox IN ('Sent','Spam','Archive') GROUP BY mailbox`,
+    ).all() as { mailbox: string; n: number }[];
     return new Map(rows.map((r) => [r.mailbox, r.n]));
   }
 
   approvedCategories(): string[] {
-    return (
-      this.db
-        .query("SELECT name FROM approved_categories ORDER BY created_at")
-        .all() as { name: string }[]
-    ).map((r) => r.name);
+    return (this.db.query("SELECT name FROM approved_categories ORDER BY created_at").all() as { name: string }[]).map((r) => r.name);
   }
 
-  /** Reopen to pick up changes made by the Go backend process. */
-  reopen(path: string) {
-    this.db.close();
-    this.db = new Database(path, { readonly: true });
+  // ---- writes / sync (engine + mail) ----
+
+  /** Insert a fetched message; existing (account,mailbox,uid) left untouched.
+   * Returns true if a new row was inserted. */
+  insertMessage(m: NewMessage): boolean {
+    const atts = m.attachments.length ? JSON.stringify(m.attachments) : "";
+    const res = this.db.query(
+      `INSERT INTO messages(account,mailbox,uid,message_id,from_addr,from_name,subject,date,snippet,body,html,attachments,seen)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(account,mailbox,uid) DO NOTHING`,
+    ).run(m.account, m.mailbox, m.uid, m.messageId, m.fromAddr, m.fromName, m.subject, m.date, m.snippet, m.body, m.html, atts, m.seen ? 1 : 0);
+    return res.changes > 0;
+  }
+
+  syncState(account: string, mailbox: string): { uidValidity: number; lastUid: number } {
+    const row = this.db.query("SELECT uid_validity, last_uid FROM sync_state WHERE account=? AND mailbox=?").get(account, mailbox) as
+      | { uid_validity: number; last_uid: number }
+      | null;
+    return row ? { uidValidity: row.uid_validity, lastUid: row.last_uid } : { uidValidity: 0, lastUid: 0 };
+  }
+
+  setSyncState(account: string, mailbox: string, uidValidity: number, lastUid: number) {
+    this.db.query(
+      `INSERT INTO sync_state(account,mailbox,uid_validity,last_uid) VALUES(?,?,?,?)
+       ON CONFLICT(account,mailbox) DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid`,
+    ).run(account, mailbox, uidValidity, lastUid);
+  }
+
+  resetMailbox(account: string, mailbox: string) {
+    this.db.query("DELETE FROM messages WHERE account=? AND mailbox=?").run(account, mailbox);
+    this.db.query("DELETE FROM sync_state WHERE account=? AND mailbox=?").run(account, mailbox);
+  }
+
+  countMessages(account: string, mailbox: string): number {
+    return (this.db.query("SELECT COUNT(*) AS n FROM messages WHERE account=? AND mailbox=?").get(account, mailbox) as any).n;
+  }
+
+  storedUIDs(account: string, mailbox: string): Set<number> {
+    const rows = this.db.query("SELECT uid FROM messages WHERE account=? AND mailbox=?").all(account, mailbox) as { uid: number }[];
+    return new Set(rows.map((r) => r.uid));
+  }
+
+  /** INBOX messages with no category yet (folders keep null category). */
+  unclassified(limit: number): { id: number; from_addr: string }[] {
+    return this.db.query(
+      "SELECT id, COALESCE(from_addr,'') AS from_addr FROM messages WHERE category IS NULL AND mailbox='INBOX' ORDER BY date DESC LIMIT ?",
+    ).all(limit) as { id: number; from_addr: string }[];
+  }
+
+  /** INBOX rows needed to re-home mail when a new sender rule is added. */
+  inboxForRules(): { id: number; from_addr: string; category: string; source: string }[] {
+    return this.db.query(
+      "SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(category,'') AS category, COALESCE(source,'') AS source FROM messages WHERE mailbox='INBOX'",
+    ).all() as any;
+  }
+
+  setClassification(id: number, category: string, source: string) {
+    this.db.query("UPDATE messages SET category=?, source=?, classified_at=? WHERE id=?").run(category, source, Math.floor(Date.now() / 1000), id);
+  }
+
+  setCategoryManual(ids: number[], category: string) {
+    const stmt = this.db.query("UPDATE messages SET category=?, source='manual', classified_at=? WHERE id=?");
+    const now = Math.floor(Date.now() / 1000);
+    const tx = this.db.transaction(() => ids.forEach((id) => stmt.run(category, now, id)));
+    tx();
+  }
+
+  /** Local mirror of a server read/unread flag change. */
+  setSeenLocal(id: number, seen: boolean) {
+    this.db.query("UPDATE messages SET seen=? WHERE id=?").run(seen ? 1 : 0, id);
+  }
+
+  /** Rows needed to map ids -> (account, uid) for server mark/attachment ops. */
+  byIds(ids: number[]): { id: number; account: string; mailbox: string; uid: number }[] {
+    if (!ids.length) return [];
+    const q = `SELECT id, account, mailbox, uid FROM messages WHERE id IN (${ids.map(() => "?").join(",")})`;
+    return this.db.query(q).all(...ids) as any;
   }
 }

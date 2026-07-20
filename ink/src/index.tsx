@@ -12,12 +12,11 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const dbPath = join(repoRoot, "spark-cli.db");
 const cfgPath = join(repoRoot, "config.yaml");
 
-for (const p of [dbPath, cfgPath, join(repoRoot, "spark-cli")]) {
-  if (!existsSync(p)) {
-    console.error(`missing ${p} — run from a repo with db, config.yaml and the Go binary built`);
-    process.exit(1);
-  }
+if (!existsSync(cfgPath)) {
+  console.error(`missing ${cfgPath} — copy config.example.yaml to config.yaml and edit`);
+  process.exit(1);
 }
+// dbPath is created on first run if absent.
 
 // Alternate screen: full-screen app without polluting scrollback.
 process.stdout.write("\x1b[?1049h\x1b[H");

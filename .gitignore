@@ -1,6 +1,3 @@
-# compiled binary
-/spark-cli
-
 # local data + secrets (never commit)
 *.db
 config.yaml
@@ -9,3 +6,7 @@ config.yaml
 # task-observer skill log (not part of the app)
 skill-observations/
 fetch.log
+
+# sqlite WAL sidecars
+*.db-shm
+*.db-wal
