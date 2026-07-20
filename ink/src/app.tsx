@@ -302,7 +302,7 @@ export function App({
   // ----- render -----
   const senderW = 18;
   const catW = listW < 72 ? 0 : 13;
-  const dateW = 6;
+  const dateW = 12; // "Jul 20 15:04"
   const subjW = Math.max(0, listW - (2 + 1 + senderW + 1 + (catW > 0 ? catW + 1 : 0) + dateW + 1));
 
   const winStart = msgs.length > bodyH ? Math.max(0, Math.min(safeMsgIdx - Math.floor(bodyH / 2), msgs.length - bodyH)) : 0;
@@ -434,8 +434,11 @@ export function App({
               const sender = fit(oneLine(m.from_name || m.from_addr), senderW);
               const cat = catW > 0 ? fit(m.category || "—", catW) : "";
               const subj = fit(oneLine(m.subject) || "(no subject)", subjW);
+              const d = new Date(m.date * 1000);
               const date = fit(
-                new Date(m.date * 1000).toLocaleDateString("en-US", { month: "short", day: "2-digit" }),
+                d.toLocaleDateString("en-US", { month: "short", day: "2-digit" }) +
+                  " " +
+                  d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
                 dateW,
               );
               if (cursor)
