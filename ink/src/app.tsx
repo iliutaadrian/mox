@@ -200,6 +200,10 @@ export function App({
       "\n" +
       "─".repeat(60) +
       "\n\n";
+    // Use the plain-text rendering (mailparser prefers the email's text/plain
+    // part, else flows the HTML to text) — it reads better than any HTML→text
+    // converter for the layout-table emails most senders use. bat can't render
+    // HTML anyway; for a true rendered page use `v` (browser).
     const body = m.body?.trim() ? m.body : m.html.replace(/<[^>]+>/g, " ").replace(/\s+\n/g, "\n");
     const file = join(tmpdir(), `spark-mail-${current.id}.txt`);
     writeFileSync(file, header + body);
@@ -212,14 +216,19 @@ export function App({
     });
     process.stdout.write("\x1b[?1049h\x1b[H");
     if (child.error) setStatus("preview failed (need bat installed)");
-    // bat left the tty cooked; re-assert raw mode + resume stdin, then repaint
-    // (blank frame first so Ink's line-diff can't skip the redraw).
+    // bat left the tty cooked; re-assert raw mode + resume stdin, then repaint.
+    // Blank frame first so Ink's line-diff can't skip the redraw; a second
+    // version bump on un-blank guarantees the real frame is emitted.
     setRawMode(true);
     stdin?.resume();
     forceClear();
     setBlank(true);
     setVersion((v) => v + 1);
-    setTimeout(() => setBlank(false), 30);
+    setTimeout(() => {
+      forceClear();
+      setBlank(false);
+      setVersion((v) => v + 1);
+    }, 40);
   }
 
   useInput((input, key) => {
