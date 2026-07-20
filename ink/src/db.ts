@@ -62,6 +62,79 @@ export type Filter =
   | { kind: "folder"; class: string }
   | { kind: "search"; query: string };
 
+// neomutt-style query. Space-separated terms, AND-ed. Supports field operators
+// and quoted phrases:
+//   from:alice subject:"invoice 2026" body:refund   (field-scoped)
+//   is:unread  is:read                              (seen flag)
+//   has:attachment                                  (has a file)
+//   in:sent  in:spam  in:archive  in:inbox          (folder class)
+//   plain words                                     (subject/sender/body)
+// Returns null for an empty query.
+function likeArg(s: string): string {
+  return `%${s.replace(/[%_\\]/g, (c) => "\\" + c)}%`;
+}
+
+function tokenize(q: string): string[] {
+  const out: string[] = [];
+  const re = /(\w+:)?"([^"]*)"|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(q)) !== null) {
+    if (m[2] !== undefined) out.push((m[1] ?? "") + m[2]);
+    else out.push(m[3]!);
+  }
+  return out;
+}
+
+export function buildSearch(query: string): { where: string; params: any[] } | null {
+  const tokens = tokenize(query.trim());
+  if (tokens.length === 0) return null;
+  const clauses: string[] = [];
+  const params: any[] = [];
+  const esc = " ESCAPE '\\'";
+  for (const tok of tokens) {
+    const ci = tok.indexOf(":");
+    const field = ci > 0 ? tok.slice(0, ci).toLowerCase() : "";
+    const value = ci > 0 ? tok.slice(ci + 1) : tok;
+    switch (field) {
+      case "from":
+        clauses.push(`(from_addr LIKE ?${esc} OR from_name LIKE ?${esc})`);
+        params.push(likeArg(value), likeArg(value));
+        break;
+      case "subject":
+      case "subj":
+        clauses.push(`subject LIKE ?${esc}`);
+        params.push(likeArg(value));
+        break;
+      case "body":
+        clauses.push(`body LIKE ?${esc}`);
+        params.push(likeArg(value));
+        break;
+      case "is":
+        if (value.toLowerCase() === "unread") clauses.push("seen = 0");
+        else if (value.toLowerCase() === "read") clauses.push("seen = 1");
+        break;
+      case "has":
+        if (value.toLowerCase().startsWith("attach"))
+          clauses.push("(attachments IS NOT NULL AND attachments != '' AND attachments != '[]')");
+        break;
+      case "in": {
+        const map: Record<string, string> = { inbox: "INBOX", sent: "Sent", spam: "Spam", archive: "Archive" };
+        const mb = map[value.toLowerCase()];
+        if (mb) {
+          clauses.push("mailbox = ?");
+          params.push(mb);
+        }
+        break;
+      }
+      default:
+        clauses.push(`(subject LIKE ?${esc} OR from_name LIKE ?${esc} OR from_addr LIKE ?${esc} OR body LIKE ?${esc})`);
+        params.push(likeArg(value), likeArg(value), likeArg(value), likeArg(value));
+    }
+  }
+  if (clauses.length === 0) return null;
+  return { where: clauses.join(" AND "), params };
+}
+
 const LIST_COLS = `id, account, mailbox, COALESCE(from_name,'') AS from_name,
   COALESCE(from_addr,'') AS from_addr, COALESCE(subject,'') AS subject,
   date, seen, COALESCE(category,'') AS category,
@@ -125,14 +198,11 @@ CREATE TABLE IF NOT EXISTS approved_categories (
         return (f.name === UNCATEGORIZED ? this.db.query(q).all(limit) : this.db.query(q).all(f.name, limit)) as MessageRow[];
       }
       case "search": {
-        if (!f.query.trim()) return [];
-        const like = `%${f.query.replace(/[%_]/g, (c) => "\\" + c)}%`;
+        const built = buildSearch(f.query);
+        if (!built) return [];
         return this.db.query(
-          `SELECT ${LIST_COLS} FROM messages
-           WHERE subject LIKE ?1 ESCAPE '\\' OR from_name LIKE ?1 ESCAPE '\\'
-              OR from_addr LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\'
-           ORDER BY date DESC LIMIT 2000`,
-        ).all(like) as MessageRow[];
+          `SELECT ${LIST_COLS} FROM messages WHERE ${built.where} ORDER BY date DESC LIMIT 2000`,
+        ).all(...built.params) as MessageRow[];
       }
     }
   }

@@ -365,7 +365,7 @@ export function App({
       : `enter open · i preview · / search · space select · r refresh · m move · A rule · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
 
   const headerNote = typing
-    ? `  /${draft}▏`
+    ? `  /${draft}▏` + (draft === "" ? "  from: subj: body: is:unread has:attachment in:sent" : "")
     : search !== null
       ? `  search: "${search}" (${msgs.length}) · esc clear`
       : "  " + status;
