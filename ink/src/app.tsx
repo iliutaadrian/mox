@@ -2,7 +2,7 @@
 // keybindings mirror the Go TUI: sidebar (All / mailboxes / manual / other),
 // message list, reading view. Reads sqlite directly; every write shells out to
 // the Go binary. Filing is by sender rules only — no AI classification.
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
 import { spawn, spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -146,6 +146,25 @@ export function App({
   const bodyH = Math.max(3, size.rows - 4);
   const listW = Math.max(16, size.cols - SIDEBAR_W - 4);
 
+  // Coalesce rapid cursor moves. Autorepeat fires one stdin event per key; each
+  // would otherwise cause its own full re-render. Accumulate the delta and flush
+  // once per animation frame (~16ms) so a held key renders ~60x/s, not 1000x/s.
+  const msgsLenRef = useRef(0);
+  msgsLenRef.current = msgs.length;
+  const moveAcc = useRef(0);
+  const moveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function scrollList(delta: number, resetScroll = false) {
+    moveAcc.current += delta;
+    if (moveTimer.current) return;
+    moveTimer.current = setTimeout(() => {
+      const d = moveAcc.current;
+      moveAcc.current = 0;
+      moveTimer.current = null;
+      setMsgIdx((i) => Math.max(0, Math.min(i + d, msgsLenRef.current - 1)));
+      if (resetScroll) setScroll(0);
+    }, 16);
+  }
+
   const targets = (): number[] =>
     selected.size > 0 ? [...selected] : current ? [current.id] : [];
 
@@ -247,11 +266,9 @@ export function App({
         setMode("list");
         setScroll(0);
       } else if (input === "j" || key.downArrow) {
-        setMsgIdx(Math.min(safeMsgIdx + 1, msgs.length - 1));
-        setScroll(0);
+        scrollList(1, true);
       } else if (input === "k" || key.upArrow) {
-        setMsgIdx(Math.max(safeMsgIdx - 1, 0));
-        setScroll(0);
+        scrollList(-1, true);
       } else if (key.ctrl && input === "d") setScroll((s) => s + Math.floor(bodyH / 2));
       else if (key.ctrl && input === "u") setScroll((s) => Math.max(0, s - Math.floor(bodyH / 2)));
       else if (input === "v") openInBrowser();
@@ -276,13 +293,13 @@ export function App({
         setSearch(null);
         setCatIdx(nextSelectable(entries, safeCatIdx, 1));
         setMsgIdx(0);
-      } else setMsgIdx(Math.min(safeMsgIdx + 1, msgs.length - 1));
+      } else scrollList(1);
     } else if (input === "k" || key.upArrow) {
       if (focus === "sidebar") {
         setSearch(null);
         setCatIdx(nextSelectable(entries, safeCatIdx, -1));
         setMsgIdx(0);
-      } else setMsgIdx(Math.max(safeMsgIdx - 1, 0));
+      } else scrollList(-1);
     } else if (input === " " && current) {
       const next = new Set(selected);
       next.has(current.id) ? next.delete(current.id) : next.add(current.id);
@@ -326,7 +343,7 @@ export function App({
         setSearch(null);
         setCatIdx((i) => nextSelectable(entries, Math.min(i, entries.length - 1), 1));
         setMsgIdx(0);
-      } else setMsgIdx((i) => Math.min(i + 3, msgs.length - 1));
+      } else scrollList(3);
       return;
     }
     if (e.type === "wheelup") {
@@ -334,7 +351,7 @@ export function App({
         setSearch(null);
         setCatIdx((i) => nextSelectable(entries, Math.min(i, entries.length - 1), -1));
         setMsgIdx(0);
-      } else setMsgIdx((i) => Math.max(i - 3, 0));
+      } else scrollList(-3);
       return;
     }
     if (e.type !== "down") return;

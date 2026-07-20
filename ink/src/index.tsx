@@ -23,6 +23,21 @@ process.stdout.write("\x1b[?1049h\x1b[H");
 const restore = () => process.stdout.write("\x1b[?1049l");
 process.on("exit", restore);
 
+// Synchronized output (DEC 2026): Ink writes a whole frame in one write() call,
+// so bracketing each write makes the terminal buffer it and swap atomically —
+// no partial repaints / tearing / flicker while scrolling. Terminals that don't
+// support it ignore the escapes. We skip our own escape writes (alt-screen,
+// mouse) so we don't double-wrap them.
+const BSU = "\x1b[?2026h";
+const ESU = "\x1b[?2026l";
+const realWrite = process.stdout.write.bind(process.stdout);
+(process.stdout as any).write = (chunk: any, ...rest: any[]) => {
+  if (typeof chunk === "string" && chunk.length > 2 && !chunk.startsWith("\x1b[?")) {
+    return realWrite(BSU + chunk + ESU, ...rest);
+  }
+  return realWrite(chunk, ...rest);
+};
+
 // forceClear lets the app drop Ink's cached frame after a child process (the
 // inline previewer) has painted over the screen, so the next render is full.
 const holder: { clear: () => void } = { clear: () => {} };
