@@ -30,7 +30,7 @@ every write (fetch, mark, move) so there is one writer implementation.
   rules in `config.yaml` or in-app: select emails (`space`) and press `A`.
 - **Full-text search** (spark-ink): press `/`, search subject/sender/body.
 - **Mouse** (spark-ink): click to select, wheel to scroll.
-- **Inline email preview** (spark-ink, `i`): renders the real HTML email to an
+- **Inline email preview** (`i`, both TUIs): renders the real HTML email to an
   image and paints it in the terminal. Needs `chafa` and Chrome/Chromium; shows
   true images in a graphics terminal (Ghostty/kitty), blocks elsewhere.
 - **Three-pane TUI**: category sidebar │ message list │ reading pane.
@@ -85,7 +85,7 @@ the highlighted email; `esc`/`q` returns to the list.
 | -------------- | ------------------------------------------------------- |
 | `enter`        | Open the highlighted email                              |
 | `r`            | Fetch new mail + file by rules                          |
-| `i`            | Preview the real email inline as an image (spark-ink)   |
+| `i`            | Preview the real email inline as an image   |
 | `/`            | Search (spark-ink)                                      |
 | `tab` / `h` `l`| Switch focus between sidebar and message list           |
 | `j` / `k` (↑↓) | Move within the focused pane                            |
@@ -102,7 +102,7 @@ the highlighted email; `esc`/`q` returns to the list.
 | -------------- | ------------------------------------------------------- |
 | `j` / `k`      | Next / previous email                                   |
 | `ctrl+u/d`     | Scroll the email                                        |
-| `i`            | Preview the real email inline as an image (spark-ink)   |
+| `i`            | Preview the real email inline as an image   |
 | `v`            | Open the full HTML email in your browser                |
 | `M` / `U`      | Mark read / unread on the server                        |
 | `esc` / `q`    | Back to the list                                        |

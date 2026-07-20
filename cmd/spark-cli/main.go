@@ -131,7 +131,7 @@ func run() error {
 		return nil
 	}
 
-	return tui.Run(st, cfg, *cfgPath)
+	return tui.Run(st, cfg, *cfgPath, dbFile)
 }
 
 // downloadAttachment re-fetches the message's named attachment over IMAP (never

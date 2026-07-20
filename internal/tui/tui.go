@@ -107,10 +107,13 @@ type markDoneMsg struct {
 	err  error
 }
 
+type previewDoneMsg struct{ err error }
+
 type model struct {
 	st      *store.Store
 	cfg     *config.Config
 	cfgPath string
+	dbPath  string
 
 	msgs      []store.Message
 	side      []sideEntry                // ordered sidebar rows (incl. headers + All)
@@ -139,10 +142,11 @@ type model struct {
 	ready bool
 }
 
-// Run starts the TUI.
-func Run(st *store.Store, cfg *config.Config, cfgPath string) error {
+// Run starts the TUI. dbPath is the SQLite file, passed to the inline
+// previewer (ink/src/preview.ts) so it can read the message being viewed.
+func Run(st *store.Store, cfg *config.Config, cfgPath, dbPath string) error {
 	m := &model{
-		st: st, cfg: cfg, cfgPath: cfgPath,
+		st: st, cfg: cfg, cfgPath: cfgPath, dbPath: dbPath,
 		selected: map[int64]bool{},
 		status:   "Press r to fetch new mail",
 	}
@@ -418,6 +422,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reload()
 		return m, nil
 
+	case previewDoneMsg:
+		if msg.err != nil {
+			m.status = "preview error: " + msg.err.Error()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.pmode != pickerNone {
 			return m.handlePicker(msg)
@@ -468,6 +478,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.promote()
 	case "v": // open the full HTML email in the default browser
 		m.openInBrowser()
+	case "i": // render the highlighted email inline in the terminal
+		if cmd := m.previewCmd(); cmd != nil {
+			return m, cmd
+		}
 	case "M": // mark targets READ on the server (writes to server)
 		if len(m.targetIDs()) > 0 && !m.busy {
 			m.busy = true
@@ -518,6 +532,10 @@ func (m *model) handleReadingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.vp.HalfPageUp()
 	case "v": // open the full HTML in the browser
 		m.openInBrowser()
+	case "i": // render the email inline in the terminal (Ghostty/kitty graphics)
+		if cmd := m.previewCmd(); cmd != nil {
+			return m, cmd
+		}
 	case "M":
 		if len(m.targetIDs()) > 0 && !m.busy {
 			m.busy = true
@@ -534,6 +552,24 @@ func (m *model) handleReadingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.promote()
 	}
 	return m, nil
+}
+
+// previewCmd suspends the TUI and renders the current email inline via the
+// shared previewer (ink/src/preview.ts: HTML → PNG → chafa). tea.ExecProcess
+// hands the terminal to the child and restores + repaints on return, so no
+// manual raw-mode/redraw juggling is needed.
+func (m *model) previewCmd() tea.Cmd {
+	msg := m.currentMessage()
+	if msg == nil {
+		return nil
+	}
+	script := filepath.Join(filepath.Dir(m.cfgPath), "ink", "src", "preview.ts")
+	if _, err := os.Stat(script); err != nil {
+		m.status = "preview needs ink/src/preview.ts (and bun + chafa)"
+		return nil
+	}
+	c := exec.Command("bun", script, m.dbPath, fmt.Sprint(msg.ID))
+	return tea.ExecProcess(c, func(err error) tea.Msg { return previewDoneMsg{err} })
 }
 
 // --- modal category picker ---
@@ -801,14 +837,14 @@ func (m *model) View() string {
 	var rightCol, hint string
 	if m.mode == modeReading {
 		rightCol = activePane.Width(m.readW).Height(bodyHeight).Render(m.renderReading(bodyHeight))
-		hint = "j/k next/prev · ctrl+u/d scroll · v html · M/U read/unread · esc/q back · ctrl+c quit"
+		hint = "j/k next/prev · ctrl+u/d scroll · i preview · v html · M/U read · esc/q back"
 	} else {
 		rightCol = pane(m.focus == focusList).Width(m.listW).Height(bodyHeight).Render(m.renderList(m.listW, bodyHeight))
 		sel := ""
 		if len(m.selected) > 0 {
 			sel = fmt.Sprintf(" · %d selected", len(m.selected))
 		}
-		hint = "enter open · space select · r refresh · m move · A rule · M/U read/unread · q quit" + sel
+		hint = "enter open · i preview · space select · r refresh · m move · A rule · M/U read · q quit" + sel
 	}
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, sb, rightCol)

@@ -6,7 +6,7 @@
 //   bun preview.ts <dbPath> <id>
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, rmSync, openSync, readSync, closeSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -36,23 +36,33 @@ if (!row) {
 const cols = process.stdout.columns || 100;
 const rows = process.stdout.rows || 30;
 
-function waitKey() {
+function waitKey(): Promise<void> {
   process.stdout.write("\n\x1b[2m— press any key to return —\x1b[0m");
-  try {
-    const fd = openSync("/dev/tty", "r");
-    const buf = Buffer.alloc(1);
-    readSync(fd, buf, 0, 1, null);
-    closeSync(fd);
-  } catch {
-    /* no tty — just return */
-  }
+  // Wait for one keypress via the stdin STREAM (not a blocking readSync, which
+  // races Node's non-blocking fd handling). Force raw mode so any single key
+  // returns, whether the parent left the tty raw (Ink) or cooked (Bubble Tea's
+  // ExecProcess). Node handles both launchers' fd state correctly this way.
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    if (!stdin.isTTY) {
+      resolve();
+      return;
+    }
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.once("data", () => {
+      stdin.setRawMode(false);
+      stdin.pause();
+      resolve();
+    });
+  });
 }
 
 // Text-only email: nothing to rasterize, print the text and bail.
 if (!row.html.trim()) {
   process.stdout.write("\x1b[2J\x1b[H");
   console.log(row.body || "(empty body)");
-  waitKey();
+  await waitKey();
   process.exit(0);
 }
 
@@ -100,6 +110,6 @@ if (process.env.TMUX) chafaArgs.push("--passthrough", "tmux");
 chafaArgs.push(pngPath);
 spawnSync("chafa", chafaArgs, { stdio: "inherit" });
 
-waitKey();
+await waitKey();
 rmSync(dir, { recursive: true, force: true });
 process.exit(0);
