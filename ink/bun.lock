@@ -8,6 +8,7 @@
         "ink": "^7.1.0",
         "mailparser": "^3.9.14",
         "react": "^19.2.7",
+        "string-width": "^8.2.2",
         "yaml": "^2.9.0",
       },
       "devDependencies": {

@@ -1,10 +1,12 @@
-// Width-safe text helpers, ported from the Go TUI (internal/tui/tui.go).
+// Width-safe text helpers. Widths are measured with string-width (the same
+// library Ink uses to lay out), so a fitted column can never disagree with the
+// renderer and wrap.
 //
 // Optional-emoji symbols (Emoji=Yes, Emoji_Presentation=No — e.g. "✍" in real
-// eMAG subjects) are rendered 1 or 2 cells wide depending on the terminal.
-// Forcing explicit emoji presentation (VS16) makes every width authority agree
-// on 2 cells, so a row can never silently overflow its column and corrupt the
-// frame. Same table as the Go implementation.
+// eMAG subjects) render 1 or 2 cells depending on the terminal. Forcing
+// explicit emoji presentation (VS16) makes the width unambiguous everywhere.
+import stringWidth from "string-width";
+
 const OPTIONAL_EMOJI: [number, number][] = [
   [0x203c, 0x203c], [0x2049, 0x2049],
   [0x2194, 0x2199], [0x21a9, 0x21aa],
@@ -56,81 +58,29 @@ export function oneLine(s: string): string {
   return emojiPresentation(s.replace(/[\r\n\t]+/g, " "));
 }
 
-// Display width per code point: emoji presentation, East Asian Wide, and the
-// common wide ranges count 2. Simplified wcwidth — matches what terminals do
-// for mail-subject content.
-function cpWidth(cp: number): number {
-  if (cp === 0xfe0f || cp === 0xfe0e || cp === 0x200d) return 0; // selectors, ZWJ
-  if (cp >= 0x0300 && cp <= 0x036f) return 0; // combining
-  if (
-    (cp >= 0x1100 && cp <= 0x115f) ||
-    (cp >= 0x2e80 && cp <= 0xa4cf) ||
-    (cp >= 0xac00 && cp <= 0xd7a3) ||
-    (cp >= 0xf900 && cp <= 0xfaff) ||
-    (cp >= 0xfe30 && cp <= 0xfe4f) ||
-    (cp >= 0xff00 && cp <= 0xff60) ||
-    (cp >= 0xffe0 && cp <= 0xffe6) ||
-    (cp >= 0x1f000 && cp <= 0x1faff) || // pictographs
-    (cp >= 0x1f900 && cp <= 0x1f9ff) ||
-    (cp >= 0x231a && cp <= 0x231b) ||
-    (cp >= 0x23e9 && cp <= 0x23f3) ||
-    (cp >= 0x25fd && cp <= 0x25fe) ||
-    (cp >= 0x2614 && cp <= 0x2615) ||
-    (cp >= 0x2648 && cp <= 0x2653) ||
-    cp === 0x267f || cp === 0x2693 || cp === 0x26a1 ||
-    (cp >= 0x26aa && cp <= 0x26ab) ||
-    (cp >= 0x26bd && cp <= 0x26be) ||
-    (cp >= 0x26c4 && cp <= 0x26c5) ||
-    cp === 0x26ce || cp === 0x26d4 || cp === 0x26ea ||
-    (cp >= 0x26f2 && cp <= 0x26f3) ||
-    cp === 0x26f5 || cp === 0x26fa || cp === 0x26fd ||
-    cp === 0x2705 || (cp >= 0x270a && cp <= 0x270b) ||
-    cp === 0x2728 || cp === 0x274c || cp === 0x274e ||
-    (cp >= 0x2753 && cp <= 0x2755) || cp === 0x2757 ||
-    (cp >= 0x2795 && cp <= 0x2797) || cp === 0x27b0 || cp === 0x27bf ||
-    (cp >= 0x2b1b && cp <= 0x2b1c) || cp === 0x2b50 || cp === 0x2b55
-  ) {
-    return 2;
-  }
-  return 1;
+// Measure with the SAME library Ink uses to lay out (string-width). A hand-
+// rolled wcwidth disagrees on some emoji/CJK; a single-cell disagreement makes
+// a row wrap inside its pane, which under rapid re-renders (holding a key) tears
+// the screen. Using Ink's own measure guarantees rows never wrap.
+export function width(s: string): number {
+  return stringWidth(s);
 }
 
-// A grapheme with VS16 gets width 2 even if its base is narrow; our
-// normalization guarantees optional emoji always carry VS16.
-export function width(s: string): number {
-  const cps = [...s];
-  let w = 0;
-  for (let i = 0; i < cps.length; i++) {
-    const cp = cps[i]!.codePointAt(0)!;
-    if (cp === 0xfe0f && i > 0 && cpWidth(cps[i - 1]!.codePointAt(0)!) === 1) {
-      w += 1; // VS16 promotes narrow base to 2
-      continue;
-    }
-    w += cpWidth(cp);
-  }
-  return w;
-}
+const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** Truncate to exactly w cells (… when cut) and right-pad with spaces. */
 export function fit(s: string, w: number): string {
   if (w <= 0) return "";
-  if (width(s) <= w) return s + " ".repeat(w - width(s));
+  const total = stringWidth(s);
+  if (total <= w) return s + " ".repeat(w - total);
+  // Truncate grapheme-by-grapheme, leaving room for the ellipsis.
   let out = "";
   let used = 0;
-  const cps = [...s];
-  for (let i = 0; i < cps.length; i++) {
-    let cw = cpWidth(cps[i]!.codePointAt(0)!);
-    // keep VS16 with its base
-    if (i + 1 < cps.length && cps[i + 1]!.codePointAt(0) === 0xfe0f) {
-      cw = Math.max(cw + 0, 2);
-    }
-    if (used + cw > w - 1) break;
-    out += cps[i];
-    if (i + 1 < cps.length && cps[i + 1]!.codePointAt(0) === 0xfe0f) {
-      out += cps[i + 1];
-      i++;
-    }
-    used += cw;
+  for (const { segment } of segmenter.segment(s)) {
+    const gw = stringWidth(segment);
+    if (used + gw > w - 1) break;
+    out += segment;
+    used += gw;
   }
   out += "…";
   used += 1;
