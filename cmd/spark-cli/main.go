@@ -5,14 +5,12 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/iliutaadrian/spark-cli/internal/ai"
 	"github.com/iliutaadrian/spark-cli/internal/config"
 	"github.com/iliutaadrian/spark-cli/internal/engine"
 	"github.com/iliutaadrian/spark-cli/internal/mail"
@@ -35,8 +33,7 @@ func run() error {
 	syncOnly := flag.Bool("sync", false, "fetch + classify, then exit (headless backend for the Ink TUI)")
 	mark := flag.String("mark", "", "mark -ids read|unread on the server, then exit")
 	move := flag.String("move", "", "move -ids to this category (manual), then exit")
-	reclassify := flag.Bool("reclassify", false, "AI re-categorize -ids, then exit")
-	idsCSV := flag.String("ids", "", "comma-separated local db message ids for -mark/-move/-reclassify")
+	idsCSV := flag.String("ids", "", "comma-separated local db message ids for -mark/-move")
 	flag.Parse()
 
 	// Load secrets from a .env file alongside the config (e.g. OPENAI_API_KEY).
@@ -80,18 +77,15 @@ func run() error {
 		return nil
 	}
 
-	// API key resolves from OPENAI_API_KEY when passed empty.
-	cls := ai.New(os.Getenv("OPENAI_API_KEY"), cfg.Model)
-
 	// Headless backend modes for the Ink TUI. Each prints one summary line to
 	// stdout and exits; errors go to stderr with exit code 1.
 	switch {
 	case *syncOnly:
-		newMail, classified, err := engine.Refresh(context.Background(), st, cfg, cls)
+		newMail, filed, err := engine.Refresh(st, cfg)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("fetched=%d classified=%d\n", newMail, classified)
+		fmt.Printf("fetched=%d filed=%d\n", newMail, filed)
 		return nil
 	case *mark != "":
 		ids, err := parseIDs(*idsCSV)
@@ -118,20 +112,9 @@ func run() error {
 		}
 		fmt.Printf("moved=%d\n", len(ids))
 		return nil
-	case *reclassify:
-		ids, err := parseIDs(*idsCSV)
-		if err != nil {
-			return err
-		}
-		n, err := engine.Reclassify(context.Background(), st, cfg, cls, ids)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("reclassified=%d\n", n)
-		return nil
 	}
 
-	return tui.Run(st, cfg, cls, *cfgPath)
+	return tui.Run(st, cfg, *cfgPath)
 }
 
 func parseIDs(csv string) ([]int64, error) {

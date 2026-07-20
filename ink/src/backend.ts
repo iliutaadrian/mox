@@ -24,6 +24,4 @@ export const backend = (repoRoot: string) => ({
     run(["-mark", seen ? "read" : "unread", "-ids", ids.join(",")], repoRoot),
   move: (ids: number[], category: string) =>
     run(["-move", category, "-ids", ids.join(",")], repoRoot),
-  reclassify: (ids: number[]) =>
-    run(["-reclassify", "-ids", ids.join(",")], repoRoot),
 });

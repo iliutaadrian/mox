@@ -1,10 +1,6 @@
 # spark-cli configuration.
 # Copy to ./config.yaml (in the project folder) and edit.
 
-# OpenAI model used for classification. Default is gpt-4o-mini, which is cheap
-# and ample for this simple, high-volume task. Set gpt-4o for higher accuracy.
-model: gpt-4o-mini
-
 # On a cold mailbox, how many recent messages to pull per account. Ignored when
 # fetch_since_days is set.
 fetch_limit: 200
@@ -22,7 +18,7 @@ accounts:
     # For Gmail, use an App Password (not your account password).
     imap_pass: "your-app-password"
     mailbox: INBOX
-    # SMTP is only needed for the (later) AI reply-draft feature.
+    # SMTP is only needed for a (future) reply-draft feature.
     smtp_host: smtp.gmail.com
     smtp_port: 465
     smtp_user: you@gmail.com
@@ -34,15 +30,12 @@ accounts:
   #   imap_user: you@work.com
   #   imap_pass: "..."
 
-# The fixed category set. The AI sorts each email into exactly one of these.
-# The description is fed to the model to guide its choice. If an email fits
-# none of them, the AI proposes a new one (shown under "Suggested" — press p
-# to approve it into the set).
-#
-# A category may also carry a `match` block of sender rules. Matching emails are
-# filed there DETERMINISTICALLY, before the AI runs (no token cost). Such a
-# category is shown under "Manual" in the sidebar; AI-only ones under "AI". You
-# can also create rules from inside the app: select emails (space) and press A.
+# The category set. Mail is filed DETERMINISTICALLY by sender rules: a category
+# with a `match` block claims any email from a matching sender. Rule categories
+# show under "Manual" in the sidebar; anything unmatched lands in Uncategorized.
+# There is no AI in the client — categorize the rest externally (e.g. Claude
+# Code) if you want. You can create rules from inside the app: select emails
+# (space) and press A. A category with no rules only holds manually-moved mail.
 #   match:
 #     domains:   [github.com]          # also matches subdomains (ci.github.com)
 #     addresses: [alerts@honeybadger.io]  # exact sender address
@@ -105,7 +98,6 @@ categories:
     description: Social-network notifications and activity digests.
     match:
       domains: [linkedin.com, strava.com]
+  # Categories without a `match` block hold only manually-moved mail (m key).
   - name: Personal
     description: Real people writing to you directly; friends, family, 1:1 threads.
-  - name: Other
-    description: Anything that does not clearly fit the categories above — let the AI decide.

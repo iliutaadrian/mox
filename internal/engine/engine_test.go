@@ -1,26 +1,23 @@
 package engine
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
-	"github.com/iliutaadrian/spark-cli/internal/ai"
 	"github.com/iliutaadrian/spark-cli/internal/config"
 	"github.com/iliutaadrian/spark-cli/internal/store"
 )
 
-// Rule-matched senders must be classified deterministically without ever
-// calling the AI. We use a classifier with no API key; if the code tried to
-// reach the network the test would fail, proving rules short-circuit the AI.
-func TestClassifyRulesSkipAI(t *testing.T) {
+// ClassifyByRules files rule-matched senders into their category and marks
+// everything else Uncategorized, deterministically and with no network.
+func TestClassifyByRules(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
 
-	for _, addr := range []string{"notifications@github.com", "build@ci.github.com"} {
+	for _, addr := range []string{"notifications@github.com", "build@ci.github.com", "stranger@example.com"} {
 		if _, err := st.InsertMessage(&store.Message{
 			Account: "A", Mailbox: "INBOX", UID: uint32(len(addr)), FromAddr: addr, Subject: "x",
 		}); err != nil {
@@ -32,16 +29,22 @@ func TestClassifyRulesSkipAI(t *testing.T) {
 		{Name: "GitHub", Match: &config.Match{Domains: []string{"github.com"}}},
 	}}
 
-	n, err := Classify(context.Background(), st, cfg, ai.New("", "gpt-4o-mini"))
+	filed, err := ClassifyByRules(st, cfg)
 	if err != nil {
-		t.Fatalf("Classify: %v", err)
+		t.Fatalf("ClassifyByRules: %v", err)
 	}
-	if n != 2 {
-		t.Fatalf("classified = %d, want 2", n)
+	if filed != 2 {
+		t.Fatalf("filed by rule = %d, want 2", filed)
 	}
 
 	all, _ := st.All()
 	for _, m := range all {
+		if m.FromAddr == "stranger@example.com" {
+			if m.Category != store.Uncategorized {
+				t.Errorf("stranger: category=%q, want Uncategorized", m.Category)
+			}
+			continue
+		}
 		if m.Category != "GitHub" || m.Source != store.SourceRule {
 			t.Errorf("msg %s: category=%q source=%q, want GitHub/rule", m.FromAddr, m.Category, m.Source)
 		}
@@ -62,9 +65,9 @@ func TestApplyRulesRehomes(t *testing.T) {
 
 	id := insert(t, st, "notifications@github.com")
 	other := insert(t, st, "friend@gmail.com")
-	// Pretend the AI previously filed both under Notifications.
-	st.SetClassification(id, "Notifications", "low", "", store.SourceAI)
-	st.SetClassification(other, "Notifications", "low", "", store.SourceAI)
+	// Pretend both were previously filed under Notifications (e.g. manually).
+	st.SetClassification(id, "Notifications", "low", "", store.SourceManual)
+	st.SetClassification(other, "Notifications", "low", "", store.SourceManual)
 
 	cfg := &config.Config{Categories: []config.Category{
 		{Name: "GitHub", Match: &config.Match{Domains: []string{"github.com"}}},

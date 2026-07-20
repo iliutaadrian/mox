@@ -101,10 +101,6 @@ type Config struct {
 	Accounts   []Account  `yaml:"accounts"`
 	Categories []Category `yaml:"categories"`
 
-	// Model is the OpenAI model used for classification. Defaults to
-	// gpt-4o-mini, which is cheap and ample for this high-volume task.
-	Model string `yaml:"model"`
-
 	// FetchLimit caps how many recent messages to pull on a cold mailbox
 	// (first sync). Defaults to 200. Ignored when FetchSinceDays > 0.
 	FetchLimit int `yaml:"fetch_limit"`
@@ -145,9 +141,6 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
-	if c.Model == "" {
-		c.Model = "gpt-4o-mini"
-	}
 	if c.FetchLimit == 0 {
 		c.FetchLimit = 200
 	}

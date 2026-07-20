@@ -1,7 +1,7 @@
 // spark-ink — Ink/React TUI over the Go spark-cli backend. Layout and
-// keybindings mirror the Go TUI: sidebar (All / mailboxes / manual / AI),
+// keybindings mirror the Go TUI: sidebar (All / mailboxes / manual / other),
 // message list, reading view. Reads sqlite directly; every write shells out to
-// the Go binary.
+// the Go binary. Filing is by sender rules only — no AI classification.
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { spawn } from "node:child_process";
@@ -54,7 +54,7 @@ function buildSidebar(store: Store, cfg: Config): SideEntry[] {
   if ((catCounts.get("Suggested") ?? 0) > 0) ai.push("Suggested");
   if ((catCounts.get("Uncategorized") ?? 0) > 0) ai.push("Uncategorized");
   if (ai.length > 0) {
-    entries.push({ kind: "header", label: "AI" });
+    entries.push({ kind: "header", label: "Other" });
     for (const name of ai)
       entries.push({ kind: "category", name, label: `${name} (${catCounts.get(name)})` });
   }
@@ -96,7 +96,7 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
   const [focus, setFocus] = useState<"sidebar" | "list">("sidebar");
   const [mode, setMode] = useState<"list" | "reading">("list");
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [status, setStatus] = useState("Press r to fetch + classify");
+  const [status, setStatus] = useState("Press r to fetch new mail");
   const [busy, setBusy] = useState(false);
   const [scroll, setScroll] = useState(0);
   const [picker, setPicker] = useState<{ options: string[]; idx: number } | null>(null);
@@ -228,10 +228,9 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
       setSelected(next);
       setMsgIdx(Math.min(safeMsgIdx + 1, msgs.length - 1));
     } else if (key.escape) setSelected(new Set());
-    else if (input === "r") void doBackend("Fetching + classifying", () => be.sync());
+    else if (input === "r") void doBackend("Fetching new mail", () => be.sync());
     else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
     else if (input === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
-    else if (input === "R") void doBackend(`Re-categorizing ${targets().length} with AI`, () => be.reclassify(targets()));
     else if (input === "m" && targets().length > 0) {
       const cats = [...new Set([...cfg.categories.map((c) => c.name), ...store.approvedCategories()])];
       if (cats.length > 0) setPicker({ options: cats, idx: 0 });
@@ -301,7 +300,7 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
   const hint =
     mode === "reading"
       ? "j/k next/prev · ctrl+u/d scroll · v html · M/U read/unread · esc/q back"
-      : `enter open · / search · space select · r refresh · R recat · m move · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
+      : `enter open · / search · space select · r refresh · m move · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
 
   const headerNote = typing
     ? `  /${draft}▏`

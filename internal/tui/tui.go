@@ -1,15 +1,14 @@
 // Package tui is the LazyGit-style terminal interface: a category sidebar, a
-// message list for the selected category, and a reading pane. AI categories
-// are a local display grouping only (Spark-style) — nothing here writes to the
-// mail server.
+// message list for the selected category, and a reading pane. Categories are a
+// local display grouping only — nothing here writes to the mail server.
 //
-// The sidebar separates Manual (rule-based) categories from AI ones, plus an
-// "All" view. Messages can be multi-selected (space) and acted on in bulk:
-// AI re-categorize (R), manual move (m), or create a sender rule (A).
+// Mail is filed by deterministic sender rules (config match blocks); anything
+// unmatched is Uncategorized. There is no AI classification in the client.
+// Messages can be multi-selected (space) and acted on in bulk: manual move (m)
+// or create a sender rule (A).
 package tui
 
 import (
-	"context"
 	"fmt"
 	nethtml "html"
 	"os"
@@ -26,7 +25,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/iliutaadrian/spark-cli/internal/ai"
 	"github.com/iliutaadrian/spark-cli/internal/config"
 	"github.com/iliutaadrian/spark-cli/internal/engine"
 	"github.com/iliutaadrian/spark-cli/internal/mail"
@@ -93,8 +91,8 @@ type pickerMode int
 
 const (
 	pickerNone pickerMode = iota
-	pickerMove                // assign selected messages to a category manually
-	pickerRule                // create a sender rule mapping selected senders -> category
+	pickerMove            // assign selected messages to a category manually
+	pickerRule            // create a sender rule mapping selected senders -> category
 )
 
 type refreshDoneMsg struct {
@@ -112,7 +110,6 @@ type markDoneMsg struct {
 type model struct {
 	st      *store.Store
 	cfg     *config.Config
-	cls     *ai.Classifier
 	cfgPath string
 
 	msgs      []store.Message
@@ -143,11 +140,11 @@ type model struct {
 }
 
 // Run starts the TUI.
-func Run(st *store.Store, cfg *config.Config, cls *ai.Classifier, cfgPath string) error {
+func Run(st *store.Store, cfg *config.Config, cfgPath string) error {
 	m := &model{
-		st: st, cfg: cfg, cls: cls, cfgPath: cfgPath,
+		st: st, cfg: cfg, cfgPath: cfgPath,
 		selected: map[int64]bool{},
-		status:   "Press r to fetch + classify",
+		status:   "Press r to fetch new mail",
 	}
 	m.reload()
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -178,7 +175,7 @@ func (m *model) reload() {
 	m.groups = groups
 	m.byAccount = byAccount
 
-	// Split configured categories into manual (rule-based) and AI buckets,
+	// Split configured categories into manual (rule-based) and other buckets,
 	// keeping only those that currently hold mail.
 	var manual, aiCats []string
 	for _, c := range m.cfg.Categories {
@@ -191,7 +188,7 @@ func (m *model) reload() {
 			aiCats = append(aiCats, c.Name)
 		}
 	}
-	// Approved (promoted) categories are AI-side.
+	// Approved (promoted) categories sit in the Other section.
 	if approved, err := m.st.ApprovedCategories(); err == nil {
 		for _, name := range approved {
 			if len(groups[name]) > 0 && !contains(aiCats, name) && !contains(manual, name) {
@@ -199,7 +196,7 @@ func (m *model) reload() {
 			}
 		}
 	}
-	// Suggested and Uncategorized live under the AI section.
+	// Suggested and Uncategorized live under the Other section.
 	if len(groups[store.SuggestedPseudoCategory]) > 0 {
 		aiCats = append(aiCats, store.SuggestedPseudoCategory)
 	}
@@ -232,7 +229,7 @@ func (m *model) reload() {
 		}
 	}
 	if len(aiCats) > 0 {
-		side = append(side, sideEntry{kind: kindHeader, name: "AI"})
+		side = append(side, sideEntry{kind: kindHeader, name: "Other"})
 		for _, n := range aiCats {
 			side = append(side, sideEntry{kind: kindCategory, name: n})
 		}
@@ -400,7 +397,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.status = "error: " + msg.err.Error()
 		} else {
-			m.status = fmt.Sprintf("Fetched %d new, classified %d — %s",
+			m.status = fmt.Sprintf("Fetched %d new, %d filed by rules — %s",
 				msg.newMail, msg.classified, time.Now().Format("15:04:05"))
 		}
 		m.reload()
@@ -445,7 +442,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		if !m.busy {
 			m.busy = true
-			m.status = "Fetching + classifying…"
+			m.status = "Fetching new mail…"
 			return m, m.refreshCmd()
 		}
 	case "tab", "left", "right", "h", "l":
@@ -482,14 +479,6 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.busy = true
 			m.status = "Marking unread on server…"
 			return m, m.markSeenCmd(false)
-		}
-	case "R": // AI re-categorize the targets
-		ids := m.targetIDs()
-		if len(ids) > 0 && !m.busy {
-			m.busy = true
-			m.status = fmt.Sprintf("Re-categorizing %d with AI…", len(ids))
-			m.selected = map[int64]bool{}
-			return m, m.reclassifyCmd(ids)
 		}
 	case "m": // manual move to a category
 		if len(m.targetIDs()) > 0 {
@@ -722,8 +711,8 @@ func (m *model) openInBrowser() {
 
 func (m *model) refreshCmd() tea.Cmd {
 	return func() tea.Msg {
-		newMail, classified, err := engine.Refresh(context.Background(), m.st, m.cfg, m.cls)
-		return refreshDoneMsg{newMail: newMail, classified: classified, err: err}
+		newMail, filed, err := engine.Refresh(m.st, m.cfg)
+		return refreshDoneMsg{newMail: newMail, classified: filed, err: err}
 	}
 }
 
@@ -765,13 +754,6 @@ func (m *model) markSeenCmd(seen bool) tea.Cmd {
 			}
 		}
 		return markDoneMsg{n: len(ids), seen: seen}
-	}
-}
-
-func (m *model) reclassifyCmd(ids []int64) tea.Cmd {
-	return func() tea.Msg {
-		n, err := engine.Reclassify(context.Background(), m.st, m.cfg, m.cls, ids)
-		return refreshDoneMsg{newMail: 0, classified: n, err: err}
 	}
 }
 
@@ -826,7 +808,7 @@ func (m *model) View() string {
 		if len(m.selected) > 0 {
 			sel = fmt.Sprintf(" · %d selected", len(m.selected))
 		}
-		hint = "enter open · space select · r refresh · R recat · m move · A rule · M/U read/unread · q quit" + sel
+		hint = "enter open · space select · r refresh · m move · A rule · M/U read/unread · q quit" + sel
 	}
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, sb, rightCol)

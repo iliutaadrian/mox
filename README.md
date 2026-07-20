@@ -1,80 +1,95 @@
 # spark-cli
 
-A terminal email client with AI-powered, **Spark-style categorization**. It
-fetches your mail over IMAP, sorts each message into a fixed set of categories
-using Claude, and presents a LazyGit-style three-pane inbox grouped by category.
+A fast terminal email client with **Spark-style categorization**. It fetches
+your mail over IMAP, files each message by deterministic sender rules, and
+presents a LazyGit-style three-pane inbox grouped by category.
 
-> **Categorize, not label.** The AI category lives only in a local SQLite
+> **Categorize, not label.** The category lives only in a local SQLite
 > database. spark-cli **never writes anything back to the mail server** — no
-> labels, no folder moves, no flag changes. Your mailbox is untouched; the
-> categorization is purely how this client chooses to display it, exactly like
-> Spark's Smart Inbox.
+> labels, no folder moves, no flag changes (except an explicit read/unread on
+> `M`/`U`). Your mailbox is otherwise untouched; the categorization is purely
+> how this client chooses to display it, like Spark's Smart Inbox.
 
-## Features (v1)
+There is **no AI/LLM in the client** — categorization is rule-based and instant.
+Anything a rule doesn't claim lands in **Uncategorized**; sort it externally
+(e.g. with Claude Code driving the headless flags below) if you want.
 
-- **Multiple IMAP accounts**, read-only, UID-incremental fetch.
-- **AI classification** into a fixed category set you define. The model picks
-  one category per email; when nothing fits, it **proposes a new category**
-  that you approve with a keypress (it then joins your set).
-- **Manual (rule-based) categories** — give a category a `match` of sender
-  domains/addresses and matching mail is filed there deterministically, before
-  the AI runs (no token cost). Create rules by hand in `config.yaml` or in-app
-  by selecting emails and pressing `A`. Manual and AI categories show as
-  separate sections in the sidebar.
-- **On-demand** classification — press `r` to fetch new mail and classify it.
-  Already-classified messages are skipped, so refreshes are cheap.
+## Two front-ends
+
+- **Go TUI** (`./spark-cli`) — Bubble Tea, the original.
+- **spark-ink** (`bun ink/src/index.tsx`) — Ink/React, adds mouse + search.
+
+Both read the same `spark-cli.db`. spark-ink shells out to the Go binary for
+every write (fetch, mark, move) so there is one writer implementation.
+
+## Features
+
+- **Multiple IMAP accounts**, read-only, UID-incremental fetch (fast refresh).
+- **Rule-based categories** — give a category a `match` of sender
+  domains/addresses and matching mail is filed there deterministically. Create
+  rules in `config.yaml` or in-app: select emails (`space`) and press `A`.
+- **Full-text search** (spark-ink): press `/`, search subject/sender/body.
+- **Mouse** (spark-ink): click to select, wheel to scroll.
 - **Three-pane TUI**: category sidebar │ message list │ reading pane.
-
-Reply drafts (AI-written, never auto-sent) are the planned next milestone — the
-SMTP config fields are already in place for them.
 
 ## Install
 
 ```bash
-go build -o spark-cli ./cmd/spark-cli
+go build -o spark-cli ./cmd/spark-cli      # Go TUI + backend
+cd ink && bun install                      # spark-ink deps (optional)
 ```
 
 ## Configure
 
 ```bash
-cp config.example.yaml config.yaml   # lives in the project folder for now
+cp config.example.yaml config.yaml
 $EDITOR config.yaml
 ```
 
 Set your IMAP accounts and the category set. For Gmail, use an
 [App Password](https://support.google.com/accounts/answer/185833), not your
-account password.
+account password. No API keys or environment variables are required.
 
 ## Run
 
 ```bash
-export OPENAI_API_KEY=sk-...   # required for classification
-./spark-cli
+./spark-cli                 # Go TUI
+bun ink/src/index.tsx       # spark-ink (from repo root)
 ```
 
-By default spark-cli reads `./config.yaml` and creates the local database alongside
-it (`./spark-cli.db`). Override either with `--config` and `--db`.
+By default spark-cli reads `./config.yaml` and creates the local database
+alongside it (`./spark-cli.db`). Override with `--config` and `--db`.
+
+### Headless backend
+
+For scripts or an external categorizer, the Go binary exits after one action:
+
+| Flag                          | Action                                    |
+| ----------------------------- | ----------------------------------------- |
+| `-fetch`                      | Fetch + store new mail only               |
+| `-sync`                       | Fetch + file by rules                     |
+| `-mark read\|unread -ids …`   | Set \Seen on the server for db ids        |
+| `-move <category> -ids …`     | Manually move db ids to a category        |
 
 ## Keys
 
 The inbox opens as a **full-width list** (no auto-preview). Press `enter` to open
-the highlighted email in a reading view; `esc`/`q` returns to the list.
+the highlighted email; `esc`/`q` returns to the list.
 
 **List view**
 
 | Key            | Action                                                  |
 | -------------- | ------------------------------------------------------- |
 | `enter`        | Open the highlighted email                              |
-| `r`            | Fetch new mail + classify                               |
+| `r`            | Fetch new mail + file by rules                          |
+| `/`            | Search (spark-ink)                                      |
 | `tab` / `h` `l`| Switch focus between sidebar and message list           |
 | `j` / `k` (↑↓) | Move within the focused pane                            |
 | `space`        | Select / deselect a message (LazyGit-style multi-select)|
-| `R`            | AI re-categorize the selected (or highlighted) messages |
 | `m`            | Manually move the selection to a category               |
 | `A`            | Create a sender rule from the selection → a category    |
 | `M` / `U`      | Mark selection read / unread **on the server**          |
-| `p`            | Approve the AI's suggested category for a message       |
-| `esc`          | Clear the selection                                     |
+| `esc`          | Clear the selection (or search)                         |
 | `q`            | Quit                                                    |
 
 **Reading view** (after `enter`)
@@ -88,37 +103,23 @@ the highlighted email in a reading view; `esc`/`q` returns to the list.
 | `esc` / `q`    | Back to the list                                        |
 
 The sidebar has an **All** view on top; a **Mailboxes** section (one entry per
-account, shown when you have more than one) to explore a single mailbox; and the
-category buckets split into **Manual** (rule-based) and **AI** sections. Category
-buckets span all mailboxes. The reading view shows each email's `Mailbox` so you
-can tell accounts apart. Bulk actions operate on the space-selected messages, or
-the highlighted one if nothing is selected.
-
-The **Suggested** bucket collects messages whose best category the AI thinks is
-new. Select one and press `p` to promote that category into your fixed set —
-every message proposing it moves into the new category, and future emails can
-be sorted there.
+account, shown when you have more than one); the rule categories under
+**Manual**; and everything else under **Other** (manually-moved categories +
+**Uncategorized**). Category buckets span all mailboxes.
 
 ## How it works
 
 ```
-IMAP (read-only)  →  local SQLite (message + AI category column)
+IMAP (read-only)  →  local SQLite (message + local category column)
                             ↓
-                  OpenAI classifies → category written LOCALLY only
+                  sender rules file each message (deterministic)
                             ↓
                   TUI groups the inbox by category (Spark-style)
 ```
 
-- `internal/config` — YAML config (accounts, categories, model).
-- `internal/store`  — SQLite; the AI category is a local-only column.
+- `internal/config` — YAML config (accounts, categories).
+- `internal/store`  — SQLite; the category is a local-only column.
 - `internal/mail`   — go-imap/v2 fetch + MIME parsing. Read-only.
-- `internal/ai`     — OpenAI classification via a batched, enum-constrained function call.
-- `internal/engine` — orchestration: fetch → classify → persist.
+- `internal/engine` — orchestration: fetch → rule-file → persist.
 - `internal/tui`    — Bubble Tea interface.
-
-### Model & cost
-
-Defaults to `gpt-4o-mini`, which is cheap and ample for this simple, high-volume
-task. Set `model: gpt-4o` in the config for higher accuracy at more cost. The
-classifier batches up to 20 emails per request and keeps the system prompt
-byte-stable so OpenAI's automatic prompt cache kicks in on repeated refreshes.
+- `ink/`            — spark-ink (Ink/React) reading the same db.
