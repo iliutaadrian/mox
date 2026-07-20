@@ -123,7 +123,7 @@ export function App({
   const [status, setStatus] = useState("Press r to fetch new mail");
   const [busy, setBusy] = useState(false);
   const [scroll, setScroll] = useState(0);
-  const [picker, setPicker] = useState<{ kind: "move" | "rule"; options: string[]; idx: number } | null>(null);
+  const [picker, setPicker] = useState<{ kind: "move" | "rule" | "url"; options: string[]; idx: number } | null>(null);
   const [search, setSearch] = useState<string | null>(null); // committed query
   const [typing, setTyping] = useState(false); // search input active
   const [draft, setDraft] = useState("");
@@ -182,6 +182,21 @@ export function App({
     setStatus("Opened HTML in browser");
   }
 
+  // urlview-like: collect URLs from the current email (html + body), dedup, and
+  // open the chosen one in the browser.
+  function openUrls() {
+    if (!current) return;
+    const m = store.full(current.id);
+    if (!m) return;
+    const found = `${m.html}\n${m.body}`.match(/https?:\/\/[^\s"'<>)\]]+/g) ?? [];
+    const urls = [...new Set(found.map((u) => u.replace(/[.,]+$/, "")))].slice(0, 50);
+    if (urls.length === 0) {
+      setStatus("no URLs in this email");
+      return;
+    }
+    setPicker({ kind: "url", options: urls, idx: 0 });
+  }
+
   // Preview the email text in `bat` (paged, themed). spawnSync blocks Ink's JS
   // so bat owns the terminal until the user quits it; then we restore raw mode
   // and force a full repaint (bat painted over Ink's cached frame).
@@ -200,11 +215,19 @@ export function App({
       "\n" +
       "─".repeat(60) +
       "\n\n";
-    // Use the plain-text rendering (mailparser prefers the email's text/plain
-    // part, else flows the HTML to text) — it reads better than any HTML→text
-    // converter for the layout-table emails most senders use. bat can't render
-    // HTML anyway; for a true rendered page use `v` (browser).
-    const body = m.body?.trim() ? m.body : m.html.replace(/<[^>]+>/g, " ").replace(/\s+\n/g, "\n");
+    // Render HTML with lynx (flows layout tables to readable text, keeps links
+    // as [N] refs + a references list) — far better than a naive strip. Fall
+    // back to the plain-text body if lynx is absent or there's no HTML.
+    let body = m.body?.trim() ?? "";
+    if (m.html.trim()) {
+      const l = spawnSync(
+        "lynx",
+        ["-dump", "-force_html", "-nomargins", "-width=100", "-assume_charset=utf-8", "-display_charset=utf-8", "-stdin"],
+        { input: m.html, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+      );
+      if (l.status === 0 && l.stdout.trim()) body = l.stdout;
+      else if (!body) body = m.html.replace(/<[^>]+>/g, " ").replace(/\s+\n/g, "\n");
+    }
     const file = join(tmpdir(), `spark-mail-${current.id}.txt`);
     writeFileSync(file, header + body);
     // Leave our alt-screen so bat's pager gets a clean screen of its own, run
@@ -256,14 +279,17 @@ export function App({
       else if (input === "j" || key.downArrow) setPicker({ ...picker, idx: Math.min(picker.idx + 1, picker.options.length - 1) });
       else if (input === "k" || key.upArrow) setPicker({ ...picker, idx: Math.max(picker.idx - 1, 0) });
       else if (key.return) {
-        const cat = picker.options[picker.idx]!;
+        const choice = picker.options[picker.idx]!;
         const ids = targets();
         const kind = picker.kind;
         setPicker(null);
-        if (kind === "move") {
-          void doBackend(`Moving ${ids.length} to ${cat}`, () => be.move(ids, cat));
+        if (kind === "url") {
+          spawn("open", [choice], { stdio: "ignore", detached: true }).unref();
+          setStatus("opened " + choice.slice(0, 60));
+        } else if (kind === "move") {
+          void doBackend(`Moving ${ids.length} to ${choice}`, () => be.move(ids, choice));
         } else {
-          const { res, cfg: reloaded } = be.rule(ids, cat);
+          const { res, cfg: reloaded } = be.rule(ids, choice);
           if (reloaded) setCfg(reloaded);
           setSelected(new Set());
           setVersion((v) => v + 1);
@@ -285,6 +311,7 @@ export function App({
       else if (key.ctrl && input === "u") setScroll((s) => Math.max(0, s - Math.floor(bodyH / 2)));
       else if (input === "v") openInBrowser();
       else if (input === "i") previewInline();
+      else if (input === "u") openUrls();
       else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
       else if (input === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
       return;
@@ -326,6 +353,7 @@ export function App({
       if (cats.length > 0) setPicker({ kind: input === "A" ? "rule" : "move", options: cats, idx: 0 });
     } else if (input === "v") openInBrowser();
     else if (input === "i") previewInline();
+    else if (input === "u") openUrls();
   });
 
   // ----- render -----
@@ -391,7 +419,7 @@ export function App({
   const hint =
     mode === "reading"
       ? "j/k next/prev · ctrl+u/d scroll · i preview · v html · M/U read/unread · esc/q back"
-      : `enter open · i preview · / search · space select · r refresh · m move · A rule · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
+      : `enter open · i preview · u urls · / search · r refresh · m move · A rule · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
 
   const headerNote = typing
     ? `  /${draft}▏` + (draft === "" ? "  from: subj: body: is:unread has:attachment in:sent" : "")
@@ -492,28 +520,41 @@ export function App({
 
       <Text color={DIM}>{fit(hint, size.cols)}</Text>
 
-      {picker && (
-        <Box
-          position="absolute"
-          marginLeft={Math.floor(size.cols / 2) - 18}
-          marginTop={Math.floor(size.rows / 2) - Math.floor(picker.options.length / 2) - 2}
-          borderStyle="round"
-          borderColor={PINK}
-          flexDirection="column"
-          paddingX={2}
-          paddingY={1}
-        >
-          <Text color={PINK} bold>
-            {picker.kind === "rule" ? "Sender rule → category" : "Move"} ({targets().length} email(s)):
-          </Text>
-          {picker.options.map((o, i) => (
-            <Text key={o} backgroundColor={i === picker.idx ? PINK : undefined} color={i === picker.idx ? "black" : undefined}>
-              {fit((i === picker.idx ? "> " : "  ") + o, 30)}
-            </Text>
-          ))}
-          <Text color={DIM}>j/k move · enter choose · esc cancel</Text>
-        </Box>
-      )}
+      {picker &&
+        (() => {
+          // Window the options so a long list (many URLs) fits on screen, and
+          // clamp the box position so it never renders off the top.
+          const maxRows = Math.max(3, Math.min(picker.options.length, size.rows - 6));
+          const w = picker.kind === "url" ? Math.min(90, size.cols - 8) : 30;
+          const start = Math.max(0, Math.min(picker.idx - Math.floor(maxRows / 2), picker.options.length - maxRows));
+          const shown = picker.options.slice(start, start + maxRows);
+          const boxH = maxRows + 4;
+          return (
+            <Box
+              position="absolute"
+              marginLeft={Math.max(1, Math.floor((size.cols - w) / 2) - 3)}
+              marginTop={Math.max(1, Math.floor((size.rows - boxH) / 2))}
+              borderStyle="round"
+              borderColor={PINK}
+              flexDirection="column"
+              paddingX={2}
+            >
+              <Text color={PINK} bold>
+                {picker.kind === "url" ? "Open URL" : picker.kind === "rule" ? "Sender rule → category" : "Move"}
+                {picker.kind === "url" ? ` (${picker.options.length})` : ` (${targets().length} email(s))`}:
+              </Text>
+              {shown.map((o, i) => {
+                const abs = start + i;
+                return (
+                  <Text key={abs} backgroundColor={abs === picker.idx ? PINK : undefined} color={abs === picker.idx ? "black" : undefined}>
+                    {fit((abs === picker.idx ? "> " : "  ") + o, w)}
+                  </Text>
+                );
+              })}
+              <Text color={DIM}>j/k move · enter choose · esc cancel</Text>
+            </Box>
+          );
+        })()}
     </Box>
   );
 }

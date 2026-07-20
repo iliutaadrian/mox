@@ -25,7 +25,8 @@ want. No API keys or environment variables required.
   rules in `config.yaml` or in-app (`A`).
 - **Full-text search** (`/`) over subject, sender, body.
 - **Mouse**: click to select, wheel to scroll.
-- **Email preview** (`i`): opens the message text in `bat` (paged, themed).
+- **Email preview** (`i`): renders HTML via `lynx` → text, paged in `bat` (themed).
+- **Open URLs** (`u`): pick any link in the message and open it in the browser.
 - **Three-pane TUI**: category sidebar │ message list │ reading pane.
 
 ## Install
@@ -34,7 +35,7 @@ want. No API keys or environment variables required.
 cd ink && bun install && cd ..
 ```
 
-Requires [Bun](https://bun.sh). Optional: `bat` for the `i` preview.
+Requires [Bun](https://bun.sh). Optional: `bat` + `lynx` for the `i` preview.
 
 ## Configure
 
@@ -75,7 +76,8 @@ email; `esc`/`q` returns to the list.
 | Key            | Action                                                  |
 | -------------- | ------------------------------------------------------- |
 | `enter`        | Open the highlighted email                              |
-| `i`            | Preview the email in bat (paged, themed)                |
+| `i`            | Preview the email (lynx→bat, paged)                     |
+| `u`            | List URLs in the email, open one in the browser         |
 | `/`            | Full-text search                                        |
 | `r`            | Fetch new mail + file by rules                          |
 | `tab` / `h` `l`| Switch focus between sidebar and message list           |
@@ -93,7 +95,8 @@ email; `esc`/`q` returns to the list.
 | -------------- | ------------------------------------------------------- |
 | `j` / `k`      | Next / previous email                                   |
 | `ctrl+u/d`     | Scroll the email                                        |
-| `i`            | Preview the email in bat (paged, themed)                |
+| `i`            | Preview the email (lynx→bat, paged)                     |
+| `u`            | List URLs in the email, open one in the browser         |
 | `v`            | Open the full HTML email in your browser                |
 | `M` / `U`      | Mark read / unread on the server                        |
 | `esc` / `q`    | Back to the list                                        |
