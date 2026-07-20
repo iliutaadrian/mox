@@ -13,6 +13,7 @@ import { Store, type Filter, type MessageRow } from "./db.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { backend } from "./backend.ts";
 import { fit, oneLine } from "./text.ts";
+import { useMouse, isMouseSeq } from "./mouse.ts";
 
 const SIDEBAR_W = 26;
 const PINK = "#ff5faf";
@@ -99,11 +100,15 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
   const [busy, setBusy] = useState(false);
   const [scroll, setScroll] = useState(0);
   const [picker, setPicker] = useState<{ options: string[]; idx: number } | null>(null);
+  const [search, setSearch] = useState<string | null>(null); // committed query
+  const [typing, setTyping] = useState(false); // search input active
+  const [draft, setDraft] = useState("");
 
   const entries = useMemo(() => buildSidebar(store, cfg), [store, cfg, version]);
   const safeCatIdx = Math.min(catIdx, entries.length - 1);
   const entry = entries[safeCatIdx]!.kind === "header" ? entries[0]! : entries[safeCatIdx]!;
-  const msgs = useMemo(() => store.list(filterOf(entry)), [store, entry, version]);
+  const activeFilter: Filter = search !== null ? { kind: "search", query: search } : filterOf(entry);
+  const msgs = useMemo(() => store.list(activeFilter), [store, entry, version, search]);
   const safeMsgIdx = Math.max(0, Math.min(msgIdx, msgs.length - 1));
   const current: MessageRow | undefined = msgs[safeMsgIdx];
   const opened = useMemo(
@@ -145,6 +150,25 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
   }
 
   useInput((input, key) => {
+    if (isMouseSeq(input)) return; // handled by useMouse
+
+    if (typing) {
+      if (key.escape) {
+        setTyping(false);
+        setDraft("");
+      } else if (key.return) {
+        setTyping(false);
+        setSearch(draft.trim() ? draft.trim() : null);
+        setFocus("list");
+        setMsgIdx(0);
+      } else if (key.backspace || key.delete) {
+        setDraft((d) => d.slice(0, -1));
+      } else if (input && !key.ctrl && !key.meta) {
+        setDraft((d) => d + input);
+      }
+      return;
+    }
+
     if (picker) {
       if (key.escape || input === "q") setPicker(null);
       else if (input === "j" || key.downArrow) setPicker({ ...picker, idx: Math.min(picker.idx + 1, picker.options.length - 1) });
@@ -177,16 +201,24 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
     }
 
     if (input === "q") exit();
-    else if (key.return && current) setMode("reading");
+    else if (input === "/") {
+      setTyping(true);
+      setDraft(search ?? "");
+    } else if (key.escape && search !== null) {
+      setSearch(null); // clear search, back to sidebar filter
+      setMsgIdx(0);
+    } else if (key.return && current) setMode("reading");
     else if (key.tab || input === "h" || input === "l" || key.leftArrow || key.rightArrow)
       setFocus(focus === "sidebar" ? "list" : "sidebar");
     else if (input === "j" || key.downArrow) {
       if (focus === "sidebar") {
+        setSearch(null);
         setCatIdx(nextSelectable(entries, safeCatIdx, 1));
         setMsgIdx(0);
       } else setMsgIdx(Math.min(safeMsgIdx + 1, msgs.length - 1));
     } else if (input === "k" || key.upArrow) {
       if (focus === "sidebar") {
+        setSearch(null);
         setCatIdx(nextSelectable(entries, safeCatIdx, -1));
         setMsgIdx(0);
       } else setMsgIdx(Math.max(safeMsgIdx - 1, 0));
@@ -218,10 +250,64 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
   const sideStart = entries.length > bodyH ? Math.max(0, Math.min(safeCatIdx - Math.floor(bodyH / 2), entries.length - bodyH)) : 0;
   const sideVisible = entries.slice(sideStart, sideStart + bodyH);
 
+  // Mouse: wheel scrolls, click selects. Screen layout — row 0 header, row 1
+  // pane top border, content rows 2..bodyH+1; sidebar box cols 0..SIDEBAR_W+1,
+  // list content begins at col SIDEBAR_W+2.
+  useMouse((e) => {
+    if (picker || typing) return;
+    if (mode === "reading") {
+      if (e.type === "wheeldown") setScroll((s) => s + 3);
+      else if (e.type === "wheelup") setScroll((s) => Math.max(0, s - 3));
+      return;
+    }
+    if (e.type === "wheeldown") {
+      if (focus === "sidebar") {
+        setSearch(null);
+        setCatIdx((i) => nextSelectable(entries, Math.min(i, entries.length - 1), 1));
+        setMsgIdx(0);
+      } else setMsgIdx((i) => Math.min(i + 3, msgs.length - 1));
+      return;
+    }
+    if (e.type === "wheelup") {
+      if (focus === "sidebar") {
+        setSearch(null);
+        setCatIdx((i) => nextSelectable(entries, Math.min(i, entries.length - 1), -1));
+        setMsgIdx(0);
+      } else setMsgIdx((i) => Math.max(i - 3, 0));
+      return;
+    }
+    if (e.type !== "down") return;
+    const contentRow = e.row - 2;
+    if (contentRow < 0 || contentRow >= bodyH) return;
+    if (e.col <= SIDEBAR_W + 1) {
+      const abs = sideStart + contentRow;
+      const target = entries[abs];
+      if (target && target.kind !== "header") {
+        setSearch(null);
+        setFocus("sidebar");
+        setCatIdx(abs);
+        setMsgIdx(0);
+      }
+    } else {
+      const abs = winStart + contentRow;
+      if (abs < msgs.length) {
+        setFocus("list");
+        if (abs === safeMsgIdx) setMode("reading"); // click current row = open
+        else setMsgIdx(abs);
+      }
+    }
+  });
+
   const hint =
     mode === "reading"
       ? "j/k next/prev · ctrl+u/d scroll · v html · M/U read/unread · esc/q back"
-      : `enter open · space select · r refresh · R recat · m move · M/U read/unread · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
+      : `enter open · / search · space select · r refresh · R recat · m move · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
+
+  const headerNote = typing
+    ? `  /${draft}▏`
+    : search !== null
+      ? `  search: "${search}" (${msgs.length}) · esc clear`
+      : "  " + status;
 
   return (
     <Box flexDirection="column" width={size.cols} height={size.rows}>
@@ -229,7 +315,7 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
         <Text color={PINK} bold>
           spark-ink
         </Text>
-        <Text color={DIM}>{"  " + status}</Text>
+        <Text color={typing ? BLUE : DIM}>{fit(headerNote, size.cols - 9)}</Text>
       </Box>
 
       <Box>
@@ -271,7 +357,7 @@ export function App({ repoRoot, dbPath, cfgPath }: { repoRoot: string; dbPath: s
           {mode === "reading" && opened ? (
             <Reading opened={opened} scroll={scroll} w={listW} h={bodyH} />
           ) : msgs.length === 0 ? (
-            <Text color={DIM}>(empty)</Text>
+            <Text color={DIM}>{search !== null ? `no matches for "${search}"` : "(empty)"}</Text>
           ) : (
             visible.map((m, i) => {
               const abs = winStart + i;

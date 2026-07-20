@@ -25,7 +25,8 @@ export type MessageFull = MessageRow & {
 export type Filter =
   | { kind: "all" }
   | { kind: "account"; name: string }
-  | { kind: "category"; name: string };
+  | { kind: "category"; name: string }
+  | { kind: "search"; query: string };
 
 const LIST_COLS = `id, account, COALESCE(from_name,'') AS from_name,
   COALESCE(from_addr,'') AS from_addr, COALESCE(subject,'') AS subject,
@@ -59,6 +60,22 @@ export class Store {
         return (f.name === "Uncategorized"
           ? this.db.query(q).all()
           : this.db.query(q).all(f.name)) as MessageRow[];
+      }
+      case "search": {
+        // Case-insensitive substring over subject, sender, and body. Empty
+        // query returns nothing (caller shows a prompt instead).
+        if (!f.query.trim()) return [];
+        const like = `%${f.query.replace(/[%_]/g, (c) => "\\" + c)}%`;
+        return this.db
+          .query(
+            `SELECT ${LIST_COLS} FROM messages
+             WHERE subject LIKE ?1 ESCAPE '\\'
+                OR from_name LIKE ?1 ESCAPE '\\'
+                OR from_addr LIKE ?1 ESCAPE '\\'
+                OR body LIKE ?1 ESCAPE '\\'
+             ORDER BY date DESC LIMIT 2000`,
+          )
+          .all(like) as MessageRow[];
       }
     }
   }
