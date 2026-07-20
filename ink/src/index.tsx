@@ -42,7 +42,7 @@ const realWrite = process.stdout.write.bind(process.stdout);
 // inline previewer) has painted over the screen, so the next render is full.
 const holder: { clear: () => void } = { clear: () => {} };
 const app = render(
-  <App repoRoot={repoRoot} dbPath={dbPath} cfgPath={cfgPath} forceClear={() => holder.clear()} />,
+  <App dbPath={dbPath} cfgPath={cfgPath} forceClear={() => holder.clear()} />,
   { exitOnCtrlC: true },
 );
 holder.clear = app.clear;

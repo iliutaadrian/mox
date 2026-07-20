@@ -25,9 +25,7 @@ want. No API keys or environment variables required.
   rules in `config.yaml` or in-app (`A`).
 - **Full-text search** (`/`) over subject, sender, body.
 - **Mouse**: click to select, wheel to scroll.
-- **Inline email preview** (`i`): renders the real HTML email to an image and
-  paints it in the terminal — true images in a graphics terminal (Ghostty/kitty)
-  via `chafa` + Chrome/Chromium, block-art elsewhere.
+- **Email preview** (`i`): opens the message text in `bat` (paged, themed).
 - **Three-pane TUI**: category sidebar │ message list │ reading pane.
 
 ## Install
@@ -36,8 +34,7 @@ want. No API keys or environment variables required.
 cd ink && bun install && cd ..
 ```
 
-Requires [Bun](https://bun.sh). Optional for inline preview: `chafa` and
-Chrome/Chromium.
+Requires [Bun](https://bun.sh). Optional: `bat` for the `i` preview.
 
 ## Configure
 
@@ -78,7 +75,7 @@ email; `esc`/`q` returns to the list.
 | Key            | Action                                                  |
 | -------------- | ------------------------------------------------------- |
 | `enter`        | Open the highlighted email                              |
-| `i`            | Preview the real email inline as an image               |
+| `i`            | Preview the email in bat (paged, themed)                |
 | `/`            | Full-text search                                        |
 | `r`            | Fetch new mail + file by rules                          |
 | `tab` / `h` `l`| Switch focus between sidebar and message list           |
@@ -96,7 +93,7 @@ email; `esc`/`q` returns to the list.
 | -------------- | ------------------------------------------------------- |
 | `j` / `k`      | Next / previous email                                   |
 | `ctrl+u/d`     | Scroll the email                                        |
-| `i`            | Preview the real email inline as an image               |
+| `i`            | Preview the email in bat (paged, themed)                |
 | `v`            | Open the full HTML email in your browser                |
 | `M` / `U`      | Mark read / unread on the server                        |
 | `esc` / `q`    | Back to the list                                        |
@@ -121,5 +118,5 @@ IMAP (read-only)  →  local SQLite (message + local category column)
 - `ink/src/mail.ts`   — imapflow fetch + mailparser MIME. Read-only (bar `M`/`U`).
 - `ink/src/engine.ts` — orchestration: fetch → rule-file → persist.
 - `ink/src/backend.ts`— in-process actions the TUI triggers (sync/mark/move/rule).
-- `ink/src/app.tsx`   — Ink/React interface; `ink/src/preview.ts` renders inline images.
+- `ink/src/app.tsx`   — Ink/React interface.
 - `ink/src/cli.ts`    — headless entry (`sync`, `attach`).

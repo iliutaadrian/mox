@@ -88,12 +88,10 @@ function nextSelectable(entries: SideEntry[], idx: number, dir: 1 | -1): number 
 }
 
 export function App({
-  repoRoot,
   dbPath,
   cfgPath,
   forceClear,
 }: {
-  repoRoot: string;
   dbPath: string;
   cfgPath: string;
   forceClear: () => void;
@@ -146,23 +144,13 @@ export function App({
   const bodyH = Math.max(3, size.rows - 4);
   const listW = Math.max(16, size.cols - SIDEBAR_W - 4);
 
-  // Coalesce rapid cursor moves. Autorepeat fires one stdin event per key; each
-  // would otherwise cause its own full re-render. Accumulate the delta and flush
-  // once per animation frame (~16ms) so a held key renders ~60x/s, not 1000x/s.
+  // Move the cursor immediately (no throttle — throttling made held keys feel
+  // laggy). Synchronized-output frames keep rapid moves from tearing.
   const msgsLenRef = useRef(0);
   msgsLenRef.current = msgs.length;
-  const moveAcc = useRef(0);
-  const moveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   function scrollList(delta: number, resetScroll = false) {
-    moveAcc.current += delta;
-    if (moveTimer.current) return;
-    moveTimer.current = setTimeout(() => {
-      const d = moveAcc.current;
-      moveAcc.current = 0;
-      moveTimer.current = null;
-      setMsgIdx((i) => Math.max(0, Math.min(i + d, msgsLenRef.current - 1)));
-      if (resetScroll) setScroll(0);
-    }, 16);
+    setMsgIdx((i) => Math.max(0, Math.min(i + delta, msgsLenRef.current - 1)));
+    if (resetScroll) setScroll(0);
   }
 
   const targets = (): number[] =>
@@ -194,25 +182,40 @@ export function App({
     setStatus("Opened HTML in browser");
   }
 
-  // Render the real email inline (Chrome → PNG → chafa). spawnSync blocks Ink's
-  // JS so the previewer owns the terminal until a key is pressed; then we force
-  // a repaint. Best inline images in Ghostty; falls back to blocks elsewhere.
+  // Preview the email text in `bat` (paged, themed). spawnSync blocks Ink's JS
+  // so bat owns the terminal until the user quits it; then we restore raw mode
+  // and force a full repaint (bat painted over Ink's cached frame).
   function previewInline() {
     if (!current) return;
-    const child = spawnSync(process.execPath, [join(repoRoot, "ink/src/preview.ts"), dbPath, String(current.id)], {
+    const m = store.full(current.id);
+    if (!m) return;
+    const atts = m.attachments ? (JSON.parse(m.attachments) as { name: string; size: number }[]) : [];
+    const header =
+      `From:    ${m.from_name} <${m.from_addr}>\n` +
+      `Subject: ${oneLine(m.subject)}\n` +
+      `Date:    ${new Date(m.date * 1000).toLocaleString("en-GB")}\n` +
+      `Mailbox: ${m.account} / ${m.mailbox}\n` +
+      atts.map((a) => `Attach:  ${a.name} (${Math.round(a.size / 1024)} KB)`).join("\n") +
+      (atts.length ? "\n" : "") +
+      "\n" +
+      "─".repeat(60) +
+      "\n\n";
+    const body = m.body?.trim() ? m.body : m.html.replace(/<[^>]+>/g, " ").replace(/\s+\n/g, "\n");
+    const file = join(tmpdir(), `spark-mail-${current.id}.txt`);
+    writeFileSync(file, header + body);
+    // Leave our alt-screen so bat's pager gets a clean screen of its own, run
+    // it, then re-enter our alt-screen and force a full repaint. (Running bat
+    // inside our alt-screen made its pager fight ours.)
+    process.stdout.write("\x1b[?1049l");
+    const child = spawnSync("bat", ["--paging=always", "--style=plain", "--wrap=character", file], {
       stdio: "inherit",
     });
-    if (child.status !== 0) setStatus("preview failed (need chafa + Chrome)");
-    // The child shared our tty and left raw mode off; re-assert it and resume
-    // stdin so Ink keeps receiving keys. Defer the clear + repaint one tick so
-    // it runs after this input handler unwinds (an immediate clear races Ink's
-    // render and leaves a blank frame until the next keypress).
+    process.stdout.write("\x1b[?1049h\x1b[H");
+    if (child.error) setStatus("preview failed (need bat installed)");
+    // bat left the tty cooked; re-assert raw mode + resume stdin, then repaint
+    // (blank frame first so Ink's line-diff can't skip the redraw).
     setRawMode(true);
     stdin?.resume();
-    // Force a full repaint: the child overwrote the screen but Ink's line-diff
-    // still holds the pre-preview frame, so it would write nothing. Render one
-    // blank frame (differs from the cached UI → clears leftover graphics), then
-    // the real UI (differs from blank → full redraw).
     forceClear();
     setBlank(true);
     setVersion((v) => v + 1);
