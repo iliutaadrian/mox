@@ -58,22 +58,6 @@ export function oneLine(s: string): string {
   return emojiPresentation(s.replace(/[\r\n\t]+/g, " "));
 }
 
-// Heuristic: is this sender an automated system (noreply / marketing / bot)
-// rather than a person? Checks the local-part and common machine subdomains.
-// Used to visually flag human mail (the stuff that usually needs a reply).
-const BOT_LOCAL = /^(no.?reply|do.?not.?reply|notifications?|notify|mailer|mailer-daemon|bounce|newsletter|news|marketing|updates?|alerts?|info|support|hello|team|contact|billing|invoice|account|automated|auto|system|postmaster|admin|help|feedback|survey|sales|promo)([._+-]|$)/i;
-const BOT_SUBDOMAIN = /@(email|mail|mailer|news|newsletter|marketing|notifications?|notify|reply|bounce|send|em[0-9]*|e|m|t|info|updates?|comms?|connect)\./i;
-
-export function isBot(addr: string): boolean {
-  const a = addr.toLowerCase().trim();
-  const at = a.indexOf("@");
-  if (at < 0) return false;
-  const local = a.slice(0, at);
-  if (BOT_LOCAL.test(local)) return true;
-  if (BOT_SUBDOMAIN.test(a)) return true;
-  return false;
-}
-
 // Measure with the SAME library Ink uses to lay out (string-width). A hand-
 // rolled wcwidth disagrees on some emoji/CJK; a single-cell disagreement makes
 // a row wrap inside its pane, which under rapid re-renders (holding a key) tears

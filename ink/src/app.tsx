@@ -13,7 +13,7 @@ import { Store, FOLDER_CLASSES, type Filter, type MessageRow } from "./db.ts";
 import { loadConfig, categoryHasRules, type Config } from "./config.ts";
 import { backend } from "./backend.ts";
 import { warmConnections } from "./mail.ts";
-import { fit, oneLine, isBot } from "./text.ts";
+import { fit, oneLine } from "./text.ts";
 import { useMouse, isMouseSeq } from "./mouse.ts";
 
 const SIDEBAR_W = 26;
@@ -21,7 +21,6 @@ const PINK = "#ff5faf";
 const BLUE = "#00afff";
 const DIM = "#808080";
 const CAT = "#87afaf";
-const HUMAN = "#87d787"; // sender-from-a-person marker
 
 // Snooze durations offered in the picker (label → seconds from now).
 const SNOOZE_OPTIONS: [string, number][] = [
@@ -480,7 +479,6 @@ export function App({
               const cursor = abs === safeMsgIdx;
               const selCh = selected.has(m.id) ? "●" : " ";
               const readCh = m.seen ? " " : "•";
-              const bot = isBot(m.from_addr);
               const sender = fit(oneLine(m.from_name || m.from_addr), senderW);
               const cat = catW > 0 ? fit(m.category || "—", catW) : "";
               const subj = fit(oneLine(m.subject) || "(no subject)", subjW);
@@ -500,8 +498,7 @@ export function App({
               return (
                 <Text key={m.id} bold={!m.seen}>
                   <Text color={PINK}>{selCh}</Text>
-                  {readCh + " "}
-                  <Text color={bot ? DIM : HUMAN}>{sender + " "}</Text>
+                  {readCh + " " + sender + " "}
                   {catW > 0 && <Text color={CAT}>{cat + " "}</Text>}
                   {subj + " "}
                   <Text color={DIM}>{date}</Text>
