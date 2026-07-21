@@ -5,15 +5,16 @@ import { Store, UNCATEGORIZED, SOURCE_RULE } from "./db.ts";
 import { matchCategory, type Config } from "./config.ts";
 import { syncAll } from "./mail.ts";
 
-/** classifyByRules files every unclassified INBOX message: rule match -> its
- * category, otherwise Uncategorized. Returns how many a rule claimed. */
+/** classifyByRules files every unclassified INBOX message: the first matching
+ * category (by sender address/domain or subject keyword, in config order) wins;
+ * anything unmatched becomes Uncategorized. Returns how many a rule claimed. */
 export function classifyByRules(store: Store, cfg: Config): number {
   let filed = 0;
   for (;;) {
     const batch = store.unclassified(500);
     if (batch.length === 0) break;
     for (const m of batch) {
-      const name = matchCategory(cfg, m.from_addr);
+      const name = matchCategory(cfg, m.from_addr, m.subject);
       if (name) {
         store.setClassification(m.id, name, SOURCE_RULE);
         filed++;
@@ -30,7 +31,7 @@ export function classifyByRules(store: Store, cfg: Config): number {
 export function applyRules(store: Store, cfg: Config): number {
   let changed = 0;
   for (const m of store.inboxForRules()) {
-    const name = matchCategory(cfg, m.from_addr);
+    const name = matchCategory(cfg, m.from_addr, m.subject);
     if (!name) continue;
     if (m.category === name && m.source === SOURCE_RULE) continue;
     store.setClassification(m.id, name, SOURCE_RULE);

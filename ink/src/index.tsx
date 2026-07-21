@@ -38,13 +38,6 @@ const realWrite = process.stdout.write.bind(process.stdout);
   return realWrite(chunk, ...rest);
 };
 
-// forceClear lets the app drop Ink's cached frame after a child process (the
-// inline previewer) has painted over the screen, so the next render is full.
-const holder: { clear: () => void } = { clear: () => {} };
-const app = render(
-  <App dbPath={dbPath} cfgPath={cfgPath} forceClear={() => holder.clear()} />,
-  { exitOnCtrlC: true },
-);
-holder.clear = app.clear;
+const app = render(<App dbPath={dbPath} cfgPath={cfgPath} />, { exitOnCtrlC: true });
 await app.waitUntilExit();
 restore();

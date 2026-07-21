@@ -1,9 +1,9 @@
 // Actions the TUI triggers, run IN-PROCESS (no subprocess). Each returns
 // {ok, out} for the status line. Writes to the server happen only in mark().
-import { Store, CLASS_INBOX } from "./db.ts";
+import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
 import { addSenderRule, loadConfig, type Account, type Config } from "./config.ts";
 import { refresh, applyRules } from "./engine.ts";
-import { detectFolders, setSeen } from "./mail.ts";
+import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages } from "./mail.ts";
 
 export type Result = { ok: boolean; out: string };
 
@@ -61,6 +61,111 @@ export function backend(store: Store, cfg: Config, cfgPath: string) {
           n += g.uids.length;
         }
         return { ok: true, out: `marked ${n} ${seen ? "read" : "unread"}` };
+      } catch (e) {
+        return { ok: false, out: String(e) };
+      }
+    },
+
+    // Move messages to the server Trash folder, then relabel the local rows to
+    // Trash (with their new server UIDs) so they move into the Trash view live.
+    async trash(ids: number[]): Promise<Result> {
+      try {
+        const rows = store.byIds(ids);
+        const accs = accByName(cfg);
+        const cache = new Map<string, Map<string, string>>();
+        const groups = new Map<string, { acc: Account; cls: string; rows: typeof rows }>();
+        for (const r of rows) {
+          const acc = accs.get(r.account);
+          if (!acc) continue;
+          const key = `${r.account}\0${r.mailbox}`;
+          let g = groups.get(key);
+          if (!g) {
+            g = { acc, cls: r.mailbox, rows: [] };
+            groups.set(key, g);
+          }
+          g.rows.push(r);
+        }
+        let n = 0;
+        for (const g of groups.values()) {
+          const name = await folderName(cache, g.acc, g.cls);
+          const uidMap = await trashMessages(g.acc, name, g.rows.map((r) => r.uid));
+          for (const r of g.rows) {
+            const nu = uidMap.get(r.uid);
+            if (nu) store.setMailboxUid(r.id, CLASS_TRASH, nu);
+            else store.deleteByIds([r.id]); // no UIDPLUS: drop, reappears on sync
+            n++;
+          }
+        }
+        return { ok: true, out: `trashed ${n}` };
+      } catch (e) {
+        return { ok: false, out: String(e) };
+      }
+    },
+
+    // Move messages to the server Archive folder, relabel local rows to Archive
+    // (with new UIDs) — they leave the inbox and show up under the DONE view.
+    async archive(ids: number[]): Promise<Result> {
+      try {
+        const rows = store.byIds(ids);
+        const accs = accByName(cfg);
+        const cache = new Map<string, Map<string, string>>();
+        const groups = new Map<string, { acc: Account; cls: string; rows: typeof rows }>();
+        for (const r of rows) {
+          const acc = accs.get(r.account);
+          if (!acc) continue;
+          const key = `${r.account}\0${r.mailbox}`;
+          let g = groups.get(key);
+          if (!g) {
+            g = { acc, cls: r.mailbox, rows: [] };
+            groups.set(key, g);
+          }
+          g.rows.push(r);
+        }
+        let n = 0;
+        for (const g of groups.values()) {
+          const name = await folderName(cache, g.acc, g.cls);
+          const uidMap = await archiveMessages(g.acc, name, g.rows.map((r) => r.uid));
+          for (const r of g.rows) {
+            const nu = uidMap.get(r.uid);
+            if (nu) store.setMailboxUid(r.id, CLASS_ARCHIVE, nu);
+            else store.deleteByIds([r.id]);
+            n++;
+          }
+        }
+        return { ok: true, out: `archived ${n}` };
+      } catch (e) {
+        return { ok: false, out: String(e) };
+      }
+    },
+
+    // Restore messages from the server Trash back to the INBOX and relabel the
+    // local rows to INBOX (with their new UIDs) so they show up immediately.
+    async untrash(ids: number[]): Promise<Result> {
+      try {
+        const rows = store.byIds(ids);
+        const accs = accByName(cfg);
+        const byAcc = new Map<string, { acc: Account; rows: typeof rows }>();
+        for (const r of rows) {
+          const acc = accs.get(r.account);
+          if (!acc) continue;
+          let g = byAcc.get(r.account);
+          if (!g) {
+            g = { acc, rows: [] };
+            byAcc.set(r.account, g);
+          }
+          g.rows.push(r);
+        }
+        let n = 0;
+        for (const g of byAcc.values()) {
+          const uidMap = await untrashMessages(g.acc, g.rows.map((r) => r.uid));
+          for (const r of g.rows) {
+            const nu = uidMap.get(r.uid);
+            if (nu) store.setMailboxUid(r.id, CLASS_INBOX, nu);
+            else store.deleteByIds([r.id]); // no UIDPLUS: drop, reappears on sync
+            n++;
+          }
+        }
+        return { ok: true, out: `restored ${n} to inbox` };
       } catch (e) {
         return { ok: false, out: String(e) };
       }

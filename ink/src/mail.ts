@@ -13,6 +13,7 @@ import {
   CLASS_SENT,
   CLASS_SPAM,
   CLASS_ARCHIVE,
+  CLASS_TRASH,
   type Attachment,
   type NewMessage,
 } from "./db.ts";
@@ -152,15 +153,17 @@ function foldersFromBoxes(boxes: any[], acc: Account): Folder[] {
     if (b.specialUse === "\\Sent") set(CLASS_SENT, b.path);
     else if (b.specialUse === "\\Junk") set(CLASS_SPAM, b.path);
     else if (b.specialUse === "\\Archive") set(CLASS_ARCHIVE, b.path);
+    else if (b.specialUse === "\\Trash") set(CLASS_TRASH, b.path);
   }
   for (const b of boxes) {
     const l = b.path.toLowerCase();
     if (l.includes("sent")) set(CLASS_SENT, b.path);
     else if (l === "bulk" || l.includes("spam") || l.includes("junk")) set(CLASS_SPAM, b.path);
     else if (l.includes("archive")) set(CLASS_ARCHIVE, b.path);
+    else if (l.includes("trash") || l.includes("deleted")) set(CLASS_TRASH, b.path);
   }
   const folders: Folder[] = [{ class: CLASS_INBOX, name: acc.mailbox }];
-  for (const cls of [CLASS_SENT, CLASS_SPAM, CLASS_ARCHIVE]) {
+  for (const cls of [CLASS_SENT, CLASS_SPAM, CLASS_ARCHIVE, CLASS_TRASH]) {
     if (byClass[cls]) folders.push({ class: cls, name: byClass[cls]! });
   }
   return folders;
@@ -227,6 +230,16 @@ async function syncOne(
     }
   }
 
+  // Reconcile server-side removals: if a message was trashed/moved/expunged
+  // outside spark-cli, its UID is gone from this folder — drop the local row so
+  // the inbox and category views stay in sync with the server.
+  try {
+    const serverUids = new Set<number>((await client.search({ all: true }, { uid: true })) || []);
+    const stored = store.storedUIDs(acc.name, cls);
+    const gone = [...stored].filter((u) => !serverUids.has(u));
+    if (gone.length) store.deleteUIDs(acc.name, cls, gone);
+  } catch {}
+
   store.setSyncState(acc.name, cls, uidValidity, maxUid);
   return inserted;
 }
@@ -274,6 +287,76 @@ export async function setSeen(acc: Account, imapName: string, uids: number[], se
     await client.mailboxOpen(imapName, { readOnly: false });
     if (seen) await client.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
     else await client.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+  } finally {
+    await client.logout();
+  }
+}
+
+// Normalize imapflow's messageMove result into a source-UID -> dest-UID map
+// (populated when the server supports UIDPLUS — Yahoo and Gmail do).
+function uidMapOf(res: any): Map<number, number> {
+  const map = new Map<number, number>();
+  if (res && res.uidMap) for (const [src, dst] of res.uidMap) map.set(Number(src), Number(dst));
+  return map;
+}
+
+/** trashMessages moves UIDs from one folder to the account's Trash folder
+ * (server mutation — recoverable from Trash, not a hard delete). Returns the
+ * source-UID -> new-Trash-UID map so the local row can follow the message. */
+export async function trashMessages(acc: Account, imapName: string, uids: number[]): Promise<Map<number, number>> {
+  if (!uids.length) return new Map();
+  const client = connect(acc);
+  await client.connect();
+  try {
+    const boxes = await client.list();
+    const trash =
+      (boxes.find((b: any) => b.specialUse === "\\Trash")?.path as string | undefined) ??
+      (boxes.find((b: any) => /trash|deleted/i.test(b.path))?.path as string | undefined);
+    if (!trash) throw new Error("no Trash folder found");
+    await client.mailboxOpen(imapName, { readOnly: false });
+    return uidMapOf(await client.messageMove(uids, trash, { uid: true }));
+  } finally {
+    await client.logout();
+  }
+}
+
+/** archiveMessages moves UIDs from a folder to the account's Archive folder
+ * (server mutation). Falls back to Gmail's "All Mail" (removing a message from
+ * the INBOX there = archived). Returns the source-UID -> new-UID map. */
+export async function archiveMessages(acc: Account, imapName: string, uids: number[]): Promise<Map<number, number>> {
+  if (!uids.length) return new Map();
+  const client = connect(acc);
+  await client.connect();
+  try {
+    const boxes = await client.list();
+    const archive =
+      (boxes.find((b: any) => b.specialUse === "\\Archive")?.path as string | undefined) ??
+      (boxes.find((b: any) => /archive/i.test(b.path))?.path as string | undefined) ??
+      (boxes.find((b: any) => b.specialUse === "\\All")?.path as string | undefined) ??
+      (boxes.find((b: any) => /all mail/i.test(b.path))?.path as string | undefined);
+    if (!archive) throw new Error("no Archive folder found");
+    await client.mailboxOpen(imapName, { readOnly: false });
+    return uidMapOf(await client.messageMove(uids, archive, { uid: true }));
+  } finally {
+    await client.logout();
+  }
+}
+
+/** untrashMessages moves UIDs from the account's Trash folder back to the
+ * INBOX (server mutation). The restored message reappears in the INBOX on the
+ * next sync (with a fresh UID assigned by the server). */
+export async function untrashMessages(acc: Account, uids: number[]): Promise<Map<number, number>> {
+  if (!uids.length) return new Map();
+  const client = connect(acc);
+  await client.connect();
+  try {
+    const boxes = await client.list();
+    const trash =
+      (boxes.find((b: any) => b.specialUse === "\\Trash")?.path as string | undefined) ??
+      (boxes.find((b: any) => /trash|deleted/i.test(b.path))?.path as string | undefined);
+    if (!trash) throw new Error("no Trash folder found");
+    await client.mailboxOpen(trash, { readOnly: false });
+    return uidMapOf(await client.messageMove(uids, acc.mailbox, { uid: true }));
   } finally {
     await client.logout();
   }

@@ -3,7 +3,7 @@
 // message list, reading view. Reads sqlite directly; every write shells out to
 // the Go binary. Filing is by sender rules only — no AI classification.
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
+import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { spawn, spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,7 +13,7 @@ import { Store, FOLDER_CLASSES, type Filter, type MessageRow } from "./db.ts";
 import { loadConfig, categoryHasRules, type Config } from "./config.ts";
 import { backend } from "./backend.ts";
 import { warmConnections } from "./mail.ts";
-import { fit, oneLine } from "./text.ts";
+import { fit, oneLine, isBot } from "./text.ts";
 import { useMouse, isMouseSeq } from "./mouse.ts";
 
 const SIDEBAR_W = 26;
@@ -21,24 +21,45 @@ const PINK = "#ff5faf";
 const BLUE = "#00afff";
 const DIM = "#808080";
 const CAT = "#87afaf";
+const HUMAN = "#87d787"; // sender-from-a-person marker
+
+// Snooze durations offered in the picker (label → seconds from now).
+const SNOOZE_OPTIONS: [string, number][] = [
+  ["1 hour", 3600],
+  ["3 hours", 10800],
+  ["Tomorrow", 86400],
+  ["3 days", 259200],
+  ["Next week", 604800],
+];
 
 type SideEntry =
-  | { kind: "all"; label: string }
+  | { kind: "inbox"; label: string; exclude: string[] }
+  | { kind: "all"; label: string; exclude: string[] }
   | { kind: "header"; label: string }
-  | { kind: "account"; name: string; label: string }
+  | { kind: "account"; name: string; label: string; exclude: string[] }
   | { kind: "category"; name: string; label: string }
-  | { kind: "folder"; cls: string; label: string };
+  | { kind: "folder"; cls: string; label: string }
+  | { kind: "snoozed"; label: string }
+  | { kind: "done"; label: string };
 
 function buildSidebar(store: Store, cfg: Config): SideEntry[] {
-  const accCounts = store.accountCounts();
+  const ex = cfg.inboxExclude;
+  const accCounts = store.accountCounts(ex);
   const catCounts = store.categoryCounts();
-  const entries: SideEntry[] = [{ kind: "all", label: `All (${store.totalCount()})` }];
+  // Top-level views: INBOX (important, minus excluded categories) · DONE · ALL.
+  // Excluded/muted categories are hidden from INBOX, ALL and account views —
+  // reachable only via their own category entry.
+  const entries: SideEntry[] = [
+    { kind: "inbox", label: `INBOX (${store.inboxCount(ex)})`, exclude: ex },
+    { kind: "done", label: `DONE (${store.doneCount()})` },
+    { kind: "all", label: `ALL (${store.allCount(ex)})`, exclude: ex },
+  ];
 
   const accounts = cfg.accounts.map((a) => a.name).filter((n) => (accCounts.get(n) ?? 0) > 0);
   if (accounts.length > 1) {
     entries.push({ kind: "header", label: "Mailboxes" });
     for (const a of accounts)
-      entries.push({ kind: "account", name: a, label: `${a} (${accCounts.get(a)})` });
+      entries.push({ kind: "account", name: a, label: `${a} (${accCounts.get(a)})`, exclude: ex });
   }
 
   const manual = cfg.categories.filter((c) => categoryHasRules(c) && (catCounts.get(c.name) ?? 0) > 0);
@@ -68,14 +89,23 @@ function buildSidebar(store: Store, cfg: Config): SideEntry[] {
     for (const c of folderRows)
       entries.push({ kind: "folder", cls: c, label: `${c} (${folderCounts.get(c)})` });
   }
+
+  const snoozed = store.snoozedCount();
+  if (snoozed > 0) {
+    entries.push({ kind: "header", label: "Views" });
+    entries.push({ kind: "snoozed", label: `Snoozed (${snoozed})` });
+  }
   return entries;
 }
 
 function filterOf(e: SideEntry): Filter {
-  if (e.kind === "account") return { kind: "account", name: e.name };
+  if (e.kind === "inbox") return { kind: "inbox", exclude: e.exclude };
+  if (e.kind === "account") return { kind: "account", name: e.name, exclude: e.exclude };
   if (e.kind === "category") return { kind: "category", name: e.name };
   if (e.kind === "folder") return { kind: "folder", class: e.cls };
-  return { kind: "all" };
+  if (e.kind === "snoozed") return { kind: "snoozed" };
+  if (e.kind === "done") return { kind: "done" };
+  return { kind: "all", exclude: e.kind === "all" ? e.exclude : [] };
 }
 
 // Render an email to display text: lynx flows the HTML (layout tables → text,
@@ -105,15 +135,12 @@ function nextSelectable(entries: SideEntry[], idx: number, dir: 1 | -1): number 
 export function App({
   dbPath,
   cfgPath,
-  forceClear,
 }: {
   dbPath: string;
   cfgPath: string;
-  forceClear: () => void;
 }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
-  const { setRawMode, stdin } = useStdin();
   const store = useMemo(() => new Store(dbPath), [dbPath]);
   const [cfg, setCfg] = useState<Config>(() => loadConfig(cfgPath));
   const be = useMemo(() => backend(store, cfg, cfgPath), [store, cfg, cfgPath]);
@@ -138,11 +165,10 @@ export function App({
   const [status, setStatus] = useState("Press r to fetch new mail");
   const [busy, setBusy] = useState(false);
   const [scroll, setScroll] = useState(0);
-  const [picker, setPicker] = useState<{ kind: "move" | "rule" | "url"; options: string[]; idx: number } | null>(null);
+  const [picker, setPicker] = useState<{ kind: "move" | "snooze"; options: string[]; idx: number } | null>(null);
   const [search, setSearch] = useState<string | null>(null); // committed query
   const [typing, setTyping] = useState(false); // search input active
   const [draft, setDraft] = useState("");
-  const [blank, setBlank] = useState(false); // one-frame blank to force full repaint
 
   const entries = useMemo(() => buildSidebar(store, cfg), [store, cfg, version]);
   const safeCatIdx = Math.min(catIdx, entries.length - 1);
@@ -208,78 +234,6 @@ export function App({
     setStatus("Opened HTML in browser");
   }
 
-  // urlview-like: collect URLs from the current email (html + body), dedup, and
-  // open the chosen one in the browser.
-  function openUrls() {
-    if (!current) return;
-    const m = store.full(current.id);
-    if (!m) return;
-    const found = `${m.html}\n${m.body}`.match(/https?:\/\/[^\s"'<>)\]]+/g) ?? [];
-    const urls = [...new Set(found.map((u) => u.replace(/[.,]+$/, "")))].slice(0, 50);
-    if (urls.length === 0) {
-      setStatus("no URLs in this email");
-      return;
-    }
-    setPicker({ kind: "url", options: urls, idx: 0 });
-  }
-
-  // Preview the email text in `bat` (paged, themed). spawnSync blocks Ink's JS
-  // so bat owns the terminal until the user quits it; then we restore raw mode
-  // and force a full repaint (bat painted over Ink's cached frame).
-  function previewInline() {
-    if (!current) return;
-    const m = store.full(current.id);
-    if (!m) return;
-    const atts = m.attachments ? (JSON.parse(m.attachments) as { name: string; size: number }[]) : [];
-    const header =
-      `From:    ${m.from_name} <${m.from_addr}>\n` +
-      `Subject: ${oneLine(m.subject)}\n` +
-      `Date:    ${new Date(m.date * 1000).toLocaleString("en-GB")}\n` +
-      `Mailbox: ${m.account} / ${m.mailbox}\n` +
-      atts.map((a) => `Attach:  ${a.name} (${Math.round(a.size / 1024)} KB)`).join("\n") +
-      (atts.length ? "\n" : "") +
-      "\n" +
-      "─".repeat(60) +
-      "\n\n";
-    // Render HTML with lynx (flows layout tables to readable text, keeps links
-    // as [N] refs + a references list) — far better than a naive strip. Fall
-    // back to the plain-text body if lynx is absent or there's no HTML.
-    let body = m.body?.trim() ?? "";
-    if (m.html.trim()) {
-      const l = spawnSync(
-        "lynx",
-        ["-dump", "-force_html", "-nomargins", "-width=100", "-assume_charset=utf-8", "-display_charset=utf-8", "-stdin"],
-        { input: m.html, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-      );
-      if (l.status === 0 && l.stdout.trim()) body = l.stdout;
-      else if (!body) body = m.html.replace(/<[^>]+>/g, " ").replace(/\s+\n/g, "\n");
-    }
-    const file = join(tmpdir(), `spark-mail-${current.id}.txt`);
-    writeFileSync(file, header + body);
-    // Leave our alt-screen so bat's pager gets a clean screen of its own, run
-    // it, then re-enter our alt-screen and force a full repaint. (Running bat
-    // inside our alt-screen made its pager fight ours.)
-    process.stdout.write("\x1b[?1049l");
-    const child = spawnSync("bat", ["--paging=always", "--style=plain", "--wrap=character", file], {
-      stdio: "inherit",
-    });
-    process.stdout.write("\x1b[?1049h\x1b[H");
-    if (child.error) setStatus("preview failed (need bat installed)");
-    // bat left the tty cooked; re-assert raw mode + resume stdin, then repaint.
-    // Blank frame first so Ink's line-diff can't skip the redraw; a second
-    // version bump on un-blank guarantees the real frame is emitted.
-    setRawMode(true);
-    stdin?.resume();
-    forceClear();
-    setBlank(true);
-    setVersion((v) => v + 1);
-    setTimeout(() => {
-      forceClear();
-      setBlank(false);
-      setVersion((v) => v + 1);
-    }, 40);
-  }
-
   useInput((input, key) => {
     if (isMouseSeq(input)) return; // handled by useMouse
 
@@ -309,36 +263,47 @@ export function App({
         const ids = targets();
         const kind = picker.kind;
         setPicker(null);
-        if (kind === "url") {
-          spawn("open", [choice], { stdio: "ignore", detached: true }).unref();
-          setStatus("opened " + choice.slice(0, 60));
-        } else if (kind === "move") {
+        if (kind === "move") {
           void doBackend(`Moving ${ids.length} to ${choice}`, () => be.move(ids, choice));
         } else {
-          const { res, cfg: reloaded } = be.rule(ids, choice);
-          if (reloaded) setCfg(reloaded);
+          const secs = SNOOZE_OPTIONS.find(([l]) => l === choice)?.[1] ?? 3600;
+          const until = Math.floor(Date.now() / 1000) + secs;
+          store.setSnooze(ids, until);
           setSelected(new Set());
+          if (mode === "reading") setMode("list");
           setVersion((v) => v + 1);
-          setStatus(res.ok ? res.out : `error: ${res.out.slice(0, 120)}`);
+          setStatus(`snoozed ${ids.length} for ${choice.toLowerCase()}`);
         }
       }
       return;
     }
 
     if (mode === "reading") {
-      if (key.escape || input === "q" || input === "h" || key.leftArrow || key.backspace) {
+      if (key.escape || input === "q" || key.backspace) {
         setMode("list");
         setScroll(0);
       } else if (input === "j" || key.downArrow) {
-        scrollList(1, true);
+        setScroll((s) => s + 1); // scroll the open email, not next/prev message
       } else if (input === "k" || key.upArrow) {
-        scrollList(-1, true);
-      } else if (key.ctrl && input === "d") setScroll((s) => s + Math.floor(bodyH / 2));
-      else if (key.ctrl && input === "u") setScroll((s) => Math.max(0, s - Math.floor(bodyH / 2)));
+        setScroll((s) => Math.max(0, s - 1));
+      } else if (input === "l" || key.rightArrow) scrollList(1, true); // next email
+      else if (input === "h" || key.leftArrow) scrollList(-1, true); // previous email
       else if (input === "v") openInBrowser();
-      else if (input === "i") previewInline();
-      else if (input === "u") openUrls();
-      else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
+      else if (input === "e") {
+        setMode("list");
+        setScroll(0);
+        void doBackend("Archiving on server", () => be.archive(targets()));
+      } else if (input === "s") {
+        setPicker({ kind: "snooze", options: SNOOZE_OPTIONS.map(([l]) => l), idx: 0 });
+      } else if (input === "d") {
+        setMode("list");
+        setScroll(0);
+        void doBackend("Trashing on server", () => be.trash(targets()));
+      } else if (input === "u" && current?.mailbox === "Trash") {
+        setMode("list");
+        setScroll(0);
+        void doBackend("Restoring from Trash", () => be.untrash(targets()));
+      } else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
       else if (input === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
       return;
     }
@@ -374,12 +339,18 @@ export function App({
     else if (input === "r") void doBackend("Fetching new mail", () => be.sync());
     else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
     else if (input === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
-    else if ((input === "m" || input === "A") && targets().length > 0) {
+    else if (input === "e" && targets().length > 0) {
+      void doBackend("Archiving on server", () => be.archive(targets()));
+    } else if (input === "s" && targets().length > 0) {
+      setPicker({ kind: "snooze", options: SNOOZE_OPTIONS.map(([l]) => l), idx: 0 });
+    } else if (input === "d" && targets().length > 0) {
+      void doBackend("Trashing on server", () => be.trash(targets()));
+    } else if (input === "u" && current?.mailbox === "Trash" && targets().length > 0) {
+      void doBackend("Restoring from Trash", () => be.untrash(targets()));
+    } else if (input === "m" && targets().length > 0) {
       const cats = [...new Set([...cfg.categories.map((c) => c.name), ...store.approvedCategories()])];
-      if (cats.length > 0) setPicker({ kind: input === "A" ? "rule" : "move", options: cats, idx: 0 });
+      if (cats.length > 0) setPicker({ kind: "move", options: cats, idx: 0 });
     } else if (input === "v") openInBrowser();
-    else if (input === "i") previewInline();
-    else if (input === "u") openUrls();
   });
 
   // ----- render -----
@@ -442,22 +413,17 @@ export function App({
     }
   });
 
+  const inTrash = activeFilter.kind === "folder" && activeFilter.class === "Trash";
   const hint =
     mode === "reading"
-      ? "j/k next/prev · ctrl+u/d scroll · i preview · v html · M/U read/unread · esc/q back"
-      : `enter open · i preview · u urls · / search · r refresh · m move · A rule · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
+      ? `j/k scroll · h/l prev/next · v html${inTrash ? " · u restore" : " · e done · s snooze · d trash"} · M/U read · esc/q back`
+      : `enter open${inTrash ? " · u restore" : " · e done · s snooze · d trash"} · m move · / search · r refresh · M/U read · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
 
   const headerNote = typing
     ? `  /${draft}▏` + (draft === "" ? "  from: subj: body: is:unread has:attachment in:sent" : "")
     : search !== null
       ? `  search: "${search}" (${msgs.length}) · esc clear`
       : "  " + status;
-
-  if (blank) {
-    // One deliberately-blank frame to clear leftover previewer graphics before
-    // the real UI repaints (see previewInline).
-    return <Box width={size.cols} height={size.rows} flexDirection="column" />;
-  }
 
   return (
     <Box flexDirection="column" width={size.cols} height={size.rows}>
@@ -514,6 +480,7 @@ export function App({
               const cursor = abs === safeMsgIdx;
               const selCh = selected.has(m.id) ? "●" : " ";
               const readCh = m.seen ? " " : "•";
+              const bot = isBot(m.from_addr);
               const sender = fit(oneLine(m.from_name || m.from_addr), senderW);
               const cat = catW > 0 ? fit(m.category || "—", catW) : "";
               const subj = fit(oneLine(m.subject) || "(no subject)", subjW);
@@ -533,7 +500,8 @@ export function App({
               return (
                 <Text key={m.id} bold={!m.seen}>
                   <Text color={PINK}>{selCh}</Text>
-                  {readCh + " " + sender + " "}
+                  {readCh + " "}
+                  <Text color={bot ? DIM : HUMAN}>{sender + " "}</Text>
                   {catW > 0 && <Text color={CAT}>{cat + " "}</Text>}
                   {subj + " "}
                   <Text color={DIM}>{date}</Text>
@@ -551,7 +519,7 @@ export function App({
           // Window the options so a long list (many URLs) fits on screen, and
           // clamp the box position so it never renders off the top.
           const maxRows = Math.max(3, Math.min(picker.options.length, size.rows - 6));
-          const w = picker.kind === "url" ? Math.min(90, size.cols - 8) : 30;
+          const w = 30;
           const start = Math.max(0, Math.min(picker.idx - Math.floor(maxRows / 2), picker.options.length - maxRows));
           const shown = picker.options.slice(start, start + maxRows);
           const boxH = maxRows + 4;
@@ -566,8 +534,8 @@ export function App({
               paddingX={2}
             >
               <Text color={PINK} bold>
-                {picker.kind === "url" ? "Open URL" : picker.kind === "rule" ? "Sender rule → category" : "Move"}
-                {picker.kind === "url" ? ` (${picker.options.length})` : ` (${targets().length} email(s))`}:
+                {picker.kind === "snooze" ? "Snooze until" : "Move"}
+                {` (${targets().length} email(s))`}:
               </Text>
               {shown.map((o, i) => {
                 const abs = start + i;
@@ -595,7 +563,7 @@ function Reading({ opened, body: bodyText, scroll, w, h }: { opened: NonNullable
     `Subject: ${oneLine(opened.subject)}`,
     `Date:    ${new Date(opened.date * 1000).toLocaleString("en-GB")}`,
     `Category: ${opened.category || "Uncategorized"}${opened.source ? `  [${opened.source}]` : ""}`,
-    ...(opened.html.trim() ? ["HTML email — v browser · u urls · i pager"] : []),
+    ...(opened.html.trim() ? ["HTML email — v browser"] : []),
     ...atts.map((a) => `📎 ${a.name}  ${a.type}  ${(a.size / 1024).toFixed(0)} KB`),
     "─".repeat(Math.max(10, w)),
     "",

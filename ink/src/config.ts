@@ -13,7 +13,7 @@ export type Account = {
   mailbox: string;
 };
 
-export type Match = { domains: string[]; addresses: string[] };
+export type Match = { domains: string[]; addresses: string[]; words: string[] };
 
 export type Category = {
   name: string;
@@ -26,10 +26,11 @@ export type Config = {
   categories: Category[];
   fetchLimit: number;
   fetchSinceDays: number;
+  inboxExclude: string[]; // category names kept OUT of the INBOX view (still in ALL)
 };
 
 export function categoryHasRules(c: Category): boolean {
-  return !!c.match && ((c.match.domains?.length ?? 0) > 0 || (c.match.addresses?.length ?? 0) > 0);
+  return !!c.match && ((c.match.domains?.length ?? 0) > 0 || (c.match.addresses?.length ?? 0) > 0 || (c.match.words?.length ?? 0) > 0);
 }
 
 export function loadConfig(path: string): Config {
@@ -49,6 +50,7 @@ export function loadConfig(path: string): Config {
       ? {
           domains: (c.match.domains ?? []).map(String),
           addresses: (c.match.addresses ?? []).map(String),
+          words: (c.match.words ?? []).map(String),
         }
       : undefined,
   }));
@@ -57,6 +59,7 @@ export function loadConfig(path: string): Config {
     categories,
     fetchLimit: Number(raw.fetch_limit ?? 200),
     fetchSinceDays: Number(raw.fetch_since_days ?? 0),
+    inboxExclude: (raw.inbox_exclude ?? []).map(String),
   };
 }
 
@@ -68,27 +71,23 @@ export function domainOf(addr: string): string {
 }
 
 /**
- * matchCategory returns the category name whose sender rule matches fromAddr,
- * or "". Exact-address rules take precedence over domain rules; within each
- * kind, categories are checked in config order. A domain rule also matches
- * subdomains (github.com matches ci.github.com).
+ * matchCategory returns the name of the first category (in config order) whose
+ * match rule claims this message, or "". A category matches on any of: an exact
+ * sender address, a sender domain (incl. subdomains — github.com matches
+ * ci.github.com), or a subject keyword (case-insensitive substring). Config
+ * order IS the precedence: put muted/blocking categories first, then
+ * keyword categories, then broad domain categories.
  */
-export function matchCategory(cfg: Config, fromAddr: string): string {
+export function matchCategory(cfg: Config, fromAddr: string, subject = ""): string {
   const addr = fromAddr.toLowerCase().trim();
-  if (!addr) return "";
   const domain = domainOf(addr);
-  // Exact address first.
+  const subj = subject.toLowerCase();
   for (const c of cfg.categories) {
-    for (const a of c.match?.addresses ?? []) {
-      if (addr === a.toLowerCase()) return c.name;
-    }
-  }
-  // Then domain (incl. subdomain).
-  for (const c of cfg.categories) {
-    for (const d of c.match?.domains ?? []) {
-      const dl = d.toLowerCase();
-      if (domain === dl || domain.endsWith("." + dl)) return c.name;
-    }
+    const m = c.match;
+    if (!m) continue;
+    if (addr && m.addresses?.some((a) => addr === a.toLowerCase())) return c.name;
+    if (domain && m.domains?.some((d) => { const dl = d.toLowerCase(); return domain === dl || domain.endsWith("." + dl); })) return c.name;
+    if (subj && m.words?.some((w) => subj.includes(w.toLowerCase()))) return c.name;
   }
   return "";
 }
