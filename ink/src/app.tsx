@@ -23,6 +23,14 @@ const DIM = "#808080";
 const CAT = "#87afaf";
 const DONE = "#5faf5f"; // ✓ marker for done mail (shown in non-inbox views)
 
+// Truecolor foreground wrap: lets a whole list row render as ONE <Text> node
+// (with colors embedded as ANSI) instead of several nested <Text> nodes — far
+// fewer Yoga layout nodes per frame, which is what makes fast scrolling snappy.
+function fg(hex: string, s: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `\x1b[38;2;${(n >> 16) & 255};${(n >> 8) & 255};${n & 255}m${s}\x1b[39m`;
+}
+
 type SideEntry =
   | { kind: "inbox"; label: string; exclude: string[] }
   | { kind: "all"; label: string; exclude: string[] }
@@ -565,14 +573,17 @@ export function App({
                     {fit(`${selCh}${doneCh}${readCh} ${sender} ${cat}${catW > 0 ? " " : ""}${subj} ${date}`, listW)}
                   </Text>
                 );
+              // One <Text> node per row (colors as ANSI) — keeps Yoga layout cheap.
+              const line =
+                fg(PINK, selCh) +
+                fg(DONE, doneCh) +
+                readCh + " " + sender + " " +
+                (catW > 0 ? fg(CAT, cat + " ") : "") +
+                subj + " " +
+                fg(DIM, date);
               return (
-                <Text key={m.id} bold={!m.seen}>
-                  <Text color={PINK}>{selCh}</Text>
-                  <Text color={DONE}>{doneCh}</Text>
-                  {readCh + " " + sender + " "}
-                  {catW > 0 && <Text color={CAT}>{cat + " "}</Text>}
-                  {subj + " "}
-                  <Text color={DIM}>{date}</Text>
+                <Text key={m.id} wrap="truncate-end" bold={!m.seen}>
+                  {line}
                 </Text>
               );
             })
@@ -637,14 +648,8 @@ function Reading({ opened, body: bodyText, scroll, w, h }: { opened: NonNullable
     "",
   ];
   const body = (bodyText || "").split("\n").map((l) => oneLine(l));
-  const lines = [...head, ...body].slice(scroll, scroll + h);
-  return (
-    <>
-      {lines.map((l, i) => (
-        <Text key={i} wrap="truncate-end">
-          {l || " "}
-        </Text>
-      ))}
-    </>
-  );
+  const lines = [...head, ...body].slice(scroll, scroll + h).map((l) => fit(l, w));
+  // One <Text> for the whole pane (joined by \n) instead of one per line —
+  // fewer Yoga nodes, so scrolling the reading view stays snappy too.
+  return <Text wrap="truncate-end">{lines.join("\n") || " "}</Text>;
 }
