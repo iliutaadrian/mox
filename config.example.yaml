@@ -10,6 +10,10 @@ fetch_limit: 200
 # stored too; the files themselves are not — fetch them on demand.
 # fetch_since_days: 730
 
+# Categories kept OUT of the INBOX and ALL views (still reachable via their own
+# sidebar entry). Use for noisy/muted buckets you never want in the main views.
+inbox_exclude: [Alerts, Muted]
+
 accounts:
   - name: Personal
     imap_host: imap.gmail.com
@@ -30,74 +34,71 @@ accounts:
   #   imap_user: you@work.com
   #   imap_pass: "..."
 
-# The category set. Mail is filed DETERMINISTICALLY by sender rules: a category
-# with a `match` block claims any email from a matching sender. Rule categories
-# show under "Manual" in the sidebar; anything unmatched lands in Uncategorized.
-# There is no AI in the client — categorize the rest externally (e.g. Claude
-# Code) if you want. You can create rules from inside the app: select emails
-# (space) and press A. A category with no rules only holds manually-moved mail.
-#   match:
-#     domains:   [github.com]          # also matches subdomains (ci.github.com)
-#     addresses: [alerts@honeybadger.io]  # exact sender address
+# The category set. Mail is filed DETERMINISTICALLY by the first category (in
+# this order) whose `match` block claims it. A `match` block supports:
+#   domains:   [github.com]              # sender domain, also matches subdomains
+#   addresses: [alerts@honeybadger.io]   # exact sender address
+#   words:     [invitation, invite]      # case-insensitive SUBSTRING of the subject
+# Order IS precedence — put muted/blocking categories first, then keyword
+# categories, then broad domain categories. Rule categories show under "Manual"
+# in the sidebar; a category with no `match` holds only manually-moved mail (m).
+# There is no AI in the client — categorize the rest externally (e.g. Claude Code).
 categories:
-  - name: Alerts
-    description: Error, uptime, and incident alerts from monitoring/infra services.
+  - name: Muted
+    description: Muted senders — hidden from every view except Muted (LinkedIn, Honeybadger).
     match:
-      domains: [honeybadger.io, opsgenie.com, render.com, digitaldefense.com]
-  - name: Finance
-    description: Brokerage, banking, crypto, and tax statements and notices.
+      domains: [linkedin.com, honeybadger.io, render.com]
+  - name: Calendar
+    description: Meeting and calendar invitations and responses (subject keywords).
     match:
-      domains:
-        [
-          interactivebrokers.com,
-          ing.ro,
-          revolut.com,
-          etoro.com,
-          binance.com,
-          bitgo.com,
-          anaf.ro,
-        ]
+      words: [invitation, invite]
+  - name: Business
+    description: Tax authority (ANAF/SPV) and Expert Mind — PFA/business admin.
+    match:
+      domains: [anaf.ro, expertmind.ro]
+      words: [SPV, expert mind]
   - name: GitHub
-    description: Pull requests, issues, mentions, Actions/CI, Dependabot.
+    description: GitHub only — pull requests, issues, mentions, Actions/CI, Dependabot.
     match:
       domains: [github.com]
-  - name: Shopping
-    description: Order confirmations, shipping, and delivery from online stores/couriers.
-    match:
-      domains:
-        [
-          emag.ro,
-          fashiondays.ro,
-          vinted.com,
-          sameday.ro,
-          fancourier.ro,
-          bman.ro,
-          cloudcart.com,
-        ]
   - name: Work
-    description: Job, colleagues, clients, anything employment-related.
+    description: Colleagues and internal company mail, Jira, Slack.
     match:
-      domains: [golfgenius.com, golfgenius.atlassian.net, slack.com]
-  - name: Travel
-    description: Flights, hotels, and trip bookings.
+      domains: [golfgenius.com, golfgenius.atlassian.net, slack.com, opsgenie.net]
+  - name: Finance
+    description: Banking, brokerage, crypto and tax statements and notices.
     match:
-      domains: [booking.com, kiwi.com, ryanairemail.com, wizzair.com]
-  - name: Notifications
-    description: Automated alerts from other services — calendar, security, app notifications.
-    match:
-      domains: [worldclass.ro, yahoo.com, apple.com]
-  - name: Newsletters
-    description: Subscriptions, digests, blogs, recurring marketing content.
-    match:
-      domains: [morningbrew.com, beehiiv.com, expertmind.com]
+      domains: [interactivebrokers.com, ing.ro, revolut.com, etoro.com, binance.com, bitgo.com]
   - name: Bills
     description: Utility and telecom invoices and payment reminders.
     match:
       domains: [eon-romania.ro, eon.ro, digi.ro]
+  - name: Shopping
+    description: Orders, shipping and delivery from online stores and couriers.
+    match:
+      domains: [emag.ro, fashiondays.ro, vinted.ro, sameday.ro, fancourier.ro, bman.ro, cloudcart.com]
+  - name: Travel
+    description: Flights, hotels and trip bookings.
+    match:
+      domains: [booking.com, kiwi.com, ryanairemail.com, wizznews.com, wizzair.com]
+  - name: Fitness
+    description: Gyms, fitness, running and cycling — workouts, activity and memberships.
+    match:
+      domains: [worldclass.ro, strava.com, garmin.com, komoot.com]
   - name: Social
     description: Social-network notifications and activity digests.
     match:
-      domains: [linkedin.com, strava.com]
+      domains: []
+  - name: Newsletters
+    description: Subscriptions, digests, blogs, recurring marketing content.
+    match:
+      domains: [morningbrew.com, beehiiv.com]
+  - name: Notifications
+    description: Automated service/account notices not covered above.
+    match:
+      domains: [cc.yahoo.com, apple.com]
   # Categories without a `match` block hold only manually-moved mail (m key).
   - name: Personal
     description: Real people writing to you directly; friends, family, 1:1 threads.
+  - name: Other
+    description: Anything that does not clearly fit the categories above.
