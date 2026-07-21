@@ -169,16 +169,39 @@ export function App({
   const bodyH = Math.max(3, size.rows - 4);
   const listW = Math.max(16, size.cols - SIDEBAR_W - 4);
 
-  // Lynx-render the opened email once (cached by id+width) so it's shown
-  // automatically in the reading pane; scrolling doesn't re-run lynx.
+  // Reading body. Older mail keeps only metadata, so its body is fetched from
+  // the server on demand when opened and cached in-session (bodyCache).
+  // renderCache holds the lynx-rendered text per email+width so scrolling is
+  // instant and lynx runs once.
   const renderCache = useRef(new Map<string, string>());
+  const bodyCache = useRef(new Map<number, { body: string; html: string }>());
+  const [fetchTick, setFetchTick] = useState(0);
+
+  useEffect(() => {
+    if (mode !== "reading" || !opened) return;
+    if (opened.body.trim() || opened.html.trim() || bodyCache.current.has(opened.id)) return;
+    let cancelled = false;
+    void be.body(opened.id).then((r) => {
+      if (cancelled) return;
+      bodyCache.current.set(opened.id, { body: r.body, html: r.html });
+      setFetchTick((t) => t + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, opened, be]);
+
   const readingBody = useMemo(() => {
     if (!opened) return "";
+    const c = bodyCache.current.get(opened.id);
+    const html = opened.html.trim() ? opened.html : (c?.html ?? "");
+    const body = opened.body.trim() ? opened.body : (c?.body ?? "");
+    if (!html.trim() && !body.trim()) return c ? "" : "(fetching…)";
     const key = `${opened.id}:${listW}`;
     const cache = renderCache.current;
-    if (!cache.has(key)) cache.set(key, renderEmailBody(opened.html, opened.body, listW));
+    if (!cache.has(key)) cache.set(key, renderEmailBody(html, body, listW));
     return cache.get(key)!;
-  }, [opened, listW]);
+  }, [opened, listW, fetchTick]);
 
   // Cursor coalescing: a held j/k fires many key-repeat events; committing a
   // React render on each one storms the terminal (the "refresh every frame"
@@ -237,9 +260,12 @@ export function App({
     if (!current) return;
     const m = store.full(current.id);
     if (!m) return;
-    const doc = m.html.trim()
-      ? m.html
-      : `<!doctype html><meta charset=utf-8><pre style="white-space:pre-wrap;font:14px/1.5 system-ui">${m.body
+    const c = bodyCache.current.get(current.id); // on-demand body for older mail
+    const html = m.html.trim() ? m.html : (c?.html ?? "");
+    const body = m.body.trim() ? m.body : (c?.body ?? "");
+    const doc = html.trim()
+      ? html
+      : `<!doctype html><meta charset=utf-8><pre style="white-space:pre-wrap;font:14px/1.5 system-ui">${body
           .replaceAll("&", "&amp;")
           .replaceAll("<", "&lt;")}</pre>`;
     const p = join(tmpdir(), "spark-ink-preview.html");

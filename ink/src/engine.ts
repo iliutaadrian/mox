@@ -41,5 +41,9 @@ export async function refresh(
   );
   const fetched = counts.reduce((a, b) => a + b, 0);
   const filed = classifyByRules(store, cfg);
+  // Keep only recent bodies on disk; older mail is fetched on demand when opened.
+  if (cfg.contentDays > 0) {
+    store.pruneContent(Math.floor(Date.now() / 1000) - cfg.contentDays * 86400);
+  }
   return { fetched, filed };
 }

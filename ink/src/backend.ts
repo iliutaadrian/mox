@@ -3,7 +3,7 @@
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
 import { type Account, type Config } from "./config.ts";
 import { refresh } from "./engine.ts";
-import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders } from "./mail.ts";
+import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders, fetchBody } from "./mail.ts";
 
 export type Result = { ok: boolean; out: string };
 
@@ -214,6 +214,20 @@ export function backend(store: Store, cfg: Config) {
         return { ok: true, out: `moved ${ids.length} to ${category}` };
       } catch (e) {
         return { ok: false, out: String(e) };
+      }
+    },
+
+    // Fetch a message's body/html on demand (older mail keeps only metadata).
+    async body(id: number): Promise<{ ok: boolean; body: string; html: string }> {
+      try {
+        const row = store.byIds([id])[0];
+        const acc = row && accByName(cfg).get(row.account);
+        if (!row || !acc) return { ok: false, body: "", html: "" };
+        const name = await folderName(new Map(), acc, row.mailbox);
+        const { text, html } = await fetchBody(acc, name, row.uid);
+        return { ok: true, body: text, html };
+      } catch {
+        return { ok: false, body: "", html: "" };
       }
     },
   };

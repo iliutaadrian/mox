@@ -403,6 +403,17 @@ export async function untrashMessages(acc: Account, uids: number[]): Promise<Map
   }
 }
 
+/** fetchBody re-fetches one message's text+html on demand (for older mail whose
+ * body we no longer keep in the local store). Uses the pooled connection. */
+export async function fetchBody(acc: Account, imapName: string, uid: number): Promise<{ text: string; html: string }> {
+  const client = await getClient(acc);
+  await client.mailboxOpen(imapName, { readOnly: true });
+  const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
+  if (!msg || !msg.source) return { text: "", html: "" };
+  const p = await simpleParser(msg.source);
+  return { text: p.text ?? "", html: typeof p.html === "string" ? p.html : "" };
+}
+
 /** fetchAttachment re-fetches one message's named attachment on demand. */
 export async function fetchAttachment(
   acc: Account,

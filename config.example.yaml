@@ -10,6 +10,11 @@ fetch_limit: 200
 # stored too; the files themselves are not — fetch them on demand.
 # fetch_since_days: 730
 
+# Keep message bodies on disk only for mail newer than this many days; older mail
+# stores metadata only and its body is fetched from the server on demand when
+# opened (keeps the local DB small). 0 disables pruning. Default 90.
+content_days: 90
+
 # Categories kept OUT of the INBOX and ALL views (still reachable via their own
 # sidebar entry). Use for noisy/muted buckets you never want in the main views.
 inbox_exclude: [Alerts, Muted]

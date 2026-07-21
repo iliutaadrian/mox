@@ -26,6 +26,7 @@ export type Config = {
   categories: Category[];
   fetchLimit: number;
   fetchSinceDays: number;
+  contentDays: number; // keep body/html only for mail newer than this; older = metadata-only, fetched on demand
   inboxExclude: string[]; // category names kept OUT of the INBOX view (still in ALL)
 };
 
@@ -55,6 +56,7 @@ export function loadConfig(path: string): Config {
     categories,
     fetchLimit: Number(raw.fetch_limit ?? 200),
     fetchSinceDays: Number(raw.fetch_since_days ?? 0),
+    contentDays: Number(raw.content_days ?? 90),
     inboxExclude: (raw.inbox_exclude ?? []).map(String),
   };
 }

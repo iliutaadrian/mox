@@ -362,6 +362,16 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     this.db.query(q).run(...ids);
   }
 
+  /** Drop stored body/html for mail older than the cutoff (unix seconds) —
+   * older messages keep only metadata; their body is fetched on demand when
+   * opened. Returns rows pruned. */
+  pruneContent(cutoff: number): number {
+    const res = this.db
+      .query("UPDATE messages SET body='', html='' WHERE date < ? AND (body <> '' OR html <> '')")
+      .run(cutoff);
+    return res.changes;
+  }
+
   /** Follow a message that moved folders on the server: relabel its mailbox and
    * update its UID to the one the server assigned in the destination folder. */
   setMailboxUid(id: number, mailbox: string, uid: number) {
