@@ -21,16 +21,9 @@ const PINK = "#ff5faf";
 const BLUE = "#00afff";
 const DIM = "#808080";
 const CAT = "#87afaf";
+const DONE = "#5faf5f"; // ✓ marker for done mail (shown in non-inbox views)
 
 // Snooze durations offered in the picker (label → seconds from now).
-const SNOOZE_OPTIONS: [string, number][] = [
-  ["1 hour", 3600],
-  ["3 hours", 10800],
-  ["Tomorrow", 86400],
-  ["3 days", 259200],
-  ["Next week", 604800],
-];
-
 type SideEntry =
   | { kind: "inbox"; label: string; exclude: string[] }
   | { kind: "all"; label: string; exclude: string[] }
@@ -38,35 +31,33 @@ type SideEntry =
   | { kind: "account"; name: string; label: string; exclude: string[] }
   | { kind: "category"; name: string; label: string }
   | { kind: "folder"; cls: string; label: string }
-  | { kind: "snoozed"; label: string }
   | { kind: "done"; label: string };
 
 function buildSidebar(store: Store, cfg: Config): SideEntry[] {
   const ex = cfg.inboxExclude;
   const accCounts = store.accountCounts(ex);
   const catCounts = store.categoryCounts();
-  // Top-level views: INBOX (important, minus excluded categories) · DONE · ALL.
-  // Excluded/muted categories are hidden from INBOX, ALL and account views —
-  // reachable only via their own category entry.
+  // INBOX = the active view (undone only). ALL + accounts live under Mailboxes
+  // and show everything (done marked with a ✓). Excluded/muted categories are
+  // kept out of INBOX/ALL/accounts — reachable via their own Filters entry.
   const entries: SideEntry[] = [
     { kind: "inbox", label: `INBOX (${store.inboxCount(ex)})`, exclude: ex },
-    { kind: "done", label: `DONE (${store.doneCount()})` },
-    { kind: "all", label: `ALL (${store.allCount(ex)})`, exclude: ex },
   ];
 
+  entries.push({ kind: "header", label: "Mailboxes" });
+  entries.push({ kind: "all", label: `ALL (${store.allCount(ex)})`, exclude: ex });
   const accounts = cfg.accounts.map((a) => a.name).filter((n) => (accCounts.get(n) ?? 0) > 0);
   if (accounts.length > 1) {
-    entries.push({ kind: "header", label: "Mailboxes" });
     for (const a of accounts)
       entries.push({ kind: "account", name: a, label: `${a} (${accCounts.get(a)})`, exclude: ex });
   }
 
-  // Every category defined in config.yaml is "Manual" (user-curated), whether or
-  // not it has an auto-match rule — Personal (no rule, manually filed) included.
+  // Every category defined in config.yaml shows under "Filters" (user-curated),
+  // whether or not it has an auto-match rule (a ruleless one holds manual moves).
   const configNames = new Set(cfg.categories.map((c) => c.name));
   const manual = cfg.categories.filter((c) => (catCounts.get(c.name) ?? 0) > 0);
   if (manual.length > 0) {
-    entries.push({ kind: "header", label: "Manual" });
+    entries.push({ kind: "header", label: "Filters" });
     for (const c of manual)
       entries.push({ kind: "category", name: c.name, label: `${c.name} (${catCounts.get(c.name)})` });
   }
@@ -92,11 +83,6 @@ function buildSidebar(store: Store, cfg: Config): SideEntry[] {
       entries.push({ kind: "folder", cls: c, label: `${c === "Archive" ? "Archived" : c} (${folderCounts.get(c)})` });
   }
 
-  const snoozed = store.snoozedCount();
-  if (snoozed > 0) {
-    entries.push({ kind: "header", label: "Views" });
-    entries.push({ kind: "snoozed", label: `Snoozed (${snoozed})` });
-  }
   return entries;
 }
 
@@ -105,7 +91,6 @@ function filterOf(e: SideEntry): Filter {
   if (e.kind === "account") return { kind: "account", name: e.name, exclude: e.exclude };
   if (e.kind === "category") return { kind: "category", name: e.name };
   if (e.kind === "folder") return { kind: "folder", class: e.cls };
-  if (e.kind === "snoozed") return { kind: "snoozed" };
   if (e.kind === "done") return { kind: "done" };
   return { kind: "all", exclude: e.kind === "all" ? e.exclude : [] };
 }
@@ -167,7 +152,7 @@ export function App({
   const [status, setStatus] = useState("Press r to fetch new mail");
   const [busy, setBusy] = useState(false);
   const [scroll, setScroll] = useState(0);
-  const [picker, setPicker] = useState<{ kind: "move" | "snooze"; options: string[]; idx: number } | null>(null);
+  const [picker, setPicker] = useState<{ kind: "move"; options: string[]; idx: number } | null>(null);
   const [search, setSearch] = useState<string | null>(null); // committed query
   const [typing, setTyping] = useState(false); // search input active
   const [draft, setDraft] = useState("");
@@ -263,19 +248,8 @@ export function App({
       else if (key.return) {
         const choice = picker.options[picker.idx]!;
         const ids = targets();
-        const kind = picker.kind;
         setPicker(null);
-        if (kind === "move") {
-          void doBackend(`Moving ${ids.length} to ${choice}`, () => be.move(ids, choice));
-        } else {
-          const secs = SNOOZE_OPTIONS.find(([l]) => l === choice)?.[1] ?? 3600;
-          const until = Math.floor(Date.now() / 1000) + secs;
-          store.setSnooze(ids, until);
-          setSelected(new Set());
-          if (mode === "reading") setMode("list");
-          setVersion((v) => v + 1);
-          setStatus(`snoozed ${ids.length} for ${choice.toLowerCase()}`);
-        }
+        void doBackend(`Moving ${ids.length} to ${choice}`, () => be.move(ids, choice));
       }
       return;
     }
@@ -299,16 +273,32 @@ export function App({
         setScroll(0);
         setVersion((v) => v + 1);
         setStatus(`done ${ids.length}`);
-      } else if (input === "s") {
-        setPicker({ kind: "snooze", options: SNOOZE_OPTIONS.map(([l]) => l), idx: 0 });
+      } else if (input === "a") {
+        setMode("list");
+        setScroll(0);
+        void doBackend("Archiving on server", () => be.archive(targets()));
       } else if (input === "d") {
         setMode("list");
         setScroll(0);
         void doBackend("Trashing on server", () => be.trash(targets()));
-      } else if (input === "u" && current?.mailbox === "Trash") {
-        setMode("list");
-        setScroll(0);
-        void doBackend("Restoring from Trash", () => be.untrash(targets()));
+      } else if (input === "u") {
+        if (current?.mailbox === "Trash") {
+          setMode("list");
+          setScroll(0);
+          void doBackend("Restoring from Trash", () => be.untrash(targets()));
+        } else if (current?.mailbox === "Archive") {
+          setMode("list");
+          setScroll(0);
+          void doBackend("Unarchiving", () => be.unarchive(targets()));
+        } else if (current?.done) {
+          const ids = targets();
+          store.setDone(ids, false);
+          setSelected(new Set());
+          setMode("list");
+          setScroll(0);
+          setVersion((v) => v + 1);
+          setStatus(`restored ${ids.length} to inbox`);
+        }
       } else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
       else if (input === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
       return;
@@ -351,12 +341,21 @@ export function App({
       setSelected(new Set());
       setVersion((v) => v + 1); // cursor index stays → now points at the next email
       setStatus(`done ${ids.length}`);
-    } else if (input === "s" && targets().length > 0) {
-      setPicker({ kind: "snooze", options: SNOOZE_OPTIONS.map(([l]) => l), idx: 0 });
+    } else if (input === "a" && targets().length > 0) {
+      void doBackend("Archiving on server", () => be.archive(targets()));
     } else if (input === "d" && targets().length > 0) {
       void doBackend("Trashing on server", () => be.trash(targets()));
-    } else if (input === "u" && current?.mailbox === "Trash" && targets().length > 0) {
-      void doBackend("Restoring from Trash", () => be.untrash(targets()));
+    } else if (input === "u" && targets().length > 0) {
+      // Restore: opposite of trash/archive/done depending on where the mail is.
+      if (current?.mailbox === "Trash") void doBackend("Restoring from Trash", () => be.untrash(targets()));
+      else if (current?.mailbox === "Archive") void doBackend("Unarchiving", () => be.unarchive(targets()));
+      else if (current?.done) {
+        const ids = targets();
+        store.setDone(ids, false);
+        setSelected(new Set());
+        setVersion((v) => v + 1);
+        setStatus(`restored ${ids.length} to inbox`);
+      }
     } else if (input === "m" && targets().length > 0) {
       const cats = [...new Set([...cfg.categories.map((c) => c.name), ...store.approvedCategories()])];
       if (cats.length > 0) setPicker({ kind: "move", options: cats, idx: 0 });
@@ -368,7 +367,7 @@ export function App({
   const senderW = 18;
   const catW = listW < 72 ? 0 : 13;
   const dateW = 17; // "Jul 20 2024 15:04" (year shown only for non-current-year)
-  const subjW = Math.max(0, listW - (2 + 1 + senderW + 1 + (catW > 0 ? catW + 1 : 0) + dateW + 1));
+  const subjW = Math.max(0, listW - (3 + 1 + senderW + 1 + (catW > 0 ? catW + 1 : 0) + dateW + 1));
 
   const winStart = msgs.length > bodyH ? Math.max(0, Math.min(safeMsgIdx - Math.floor(bodyH / 2), msgs.length - bodyH)) : 0;
   const visible = msgs.slice(winStart, winStart + bodyH);
@@ -424,11 +423,15 @@ export function App({
     }
   });
 
-  const inTrash = activeFilter.kind === "folder" && activeFilter.class === "Trash";
+  // Restore (u) applies in Trash/Archive folders, or when the cursor is on a
+  // done email (undone → back to inbox) — done mail shows in ALL/categories.
+  const restorable =
+    (activeFilter.kind === "folder" && (activeFilter.class === "Trash" || activeFilter.class === "Archive")) ||
+    !!current?.done;
   const hint =
     mode === "reading"
-      ? `j/k scroll · h/l prev/next · v html${inTrash ? " · u restore" : " · e done · s snooze · d trash"} · M/U read · esc/q back`
-      : `enter open${inTrash ? " · u restore" : " · e done · s snooze · d trash"} · m move · / search · r refresh · M/U read · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
+      ? `j/k scroll · h/l prev/next · v html${restorable ? " · u restore" : " · e done · a archive · d trash"} · M/U read · esc/q back`
+      : `enter open${restorable ? " · u restore" : " · e done · a archive · d trash"} · m move · / search · r refresh · M/U read · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
 
   const headerNote = typing
     ? `  /${draft}▏` + (draft === "" ? "  from: subj: body: is:unread has:attachment in:sent" : "")
@@ -490,6 +493,7 @@ export function App({
               const abs = winStart + i;
               const cursor = abs === safeMsgIdx;
               const selCh = selected.has(m.id) ? "●" : " ";
+              const doneCh = m.done ? "✓" : " ";
               const readCh = m.seen ? " " : "•";
               const sender = fit(oneLine(m.from_name || m.from_addr), senderW);
               const cat = catW > 0 ? fit(m.category || "—", catW) : "";
@@ -505,12 +509,13 @@ export function App({
               if (cursor)
                 return (
                   <Text key={m.id} backgroundColor={PINK} color="black">
-                    {fit(`${selCh}${readCh} ${sender} ${cat}${catW > 0 ? " " : ""}${subj} ${date}`, listW)}
+                    {fit(`${selCh}${doneCh}${readCh} ${sender} ${cat}${catW > 0 ? " " : ""}${subj} ${date}`, listW)}
                   </Text>
                 );
               return (
                 <Text key={m.id} bold={!m.seen}>
                   <Text color={PINK}>{selCh}</Text>
+                  <Text color={DONE}>{doneCh}</Text>
                   {readCh + " " + sender + " "}
                   {catW > 0 && <Text color={CAT}>{cat + " "}</Text>}
                   {subj + " "}
@@ -544,7 +549,7 @@ export function App({
               paddingX={2}
             >
               <Text color={PINK} bold>
-                {picker.kind === "snooze" ? "Snooze until" : "Move"}
+                {"Move"}
                 {` (${targets().length} email(s))`}:
               </Text>
               {shown.map((o, i) => {

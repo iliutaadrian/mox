@@ -277,6 +277,26 @@ export async function syncAll(
   }
 }
 
+/** reconcileFolders is a cheap removal-only sync for folders we don't fully
+ * mirror (Trash/Archive): it lists server UIDs (no message fetch — so Gmail's
+ * huge All Mail isn't downloaded) and drops any local row whose UID is gone,
+ * keeping local Trash/Archive in step with the server after `r`. */
+export async function reconcileFolders(store: Store, acc: Account, classes: string[]): Promise<void> {
+  const client = await getClient(acc);
+  const folders = foldersFromBoxes(await client.list(), acc).filter((f) => classes.includes(f.class));
+  for (const f of folders) {
+    // Skip Gmail's "All Mail": it holds every message (nothing is ever "gone"
+    // from it) and listing its tens of thousands of UIDs on every refresh is
+    // pointlessly slow.
+    if (/all mail/i.test(f.name)) continue;
+    await client.mailboxOpen(f.name, { readOnly: true });
+    const serverUids = new Set<number>((await client.search({ all: true }, { uid: true })) || []);
+    const stored = store.storedUIDs(acc.name, f.class);
+    const gone = [...stored].filter((u) => !serverUids.has(u));
+    if (gone.length) store.deleteUIDs(acc.name, f.class, gone);
+  }
+}
+
 /** setSeen sets/clears \Seen on the server for UIDs in one folder (the only
  * server write). */
 export async function setSeen(acc: Account, imapName: string, uids: number[], seen: boolean): Promise<void> {
@@ -337,6 +357,27 @@ export async function archiveMessages(acc: Account, imapName: string, uids: numb
     if (!archive) throw new Error("no Archive folder found");
     await client.mailboxOpen(imapName, { readOnly: false });
     return uidMapOf(await client.messageMove(uids, archive, { uid: true }));
+  } finally {
+    await client.logout();
+  }
+}
+
+/** unarchiveMessages moves UIDs from the account's Archive folder (Gmail: All
+ * Mail) back to the INBOX. Returns the source-UID -> new-INBOX-UID map. */
+export async function unarchiveMessages(acc: Account, uids: number[]): Promise<Map<number, number>> {
+  if (!uids.length) return new Map();
+  const client = connect(acc);
+  await client.connect();
+  try {
+    const boxes = await client.list();
+    const archive =
+      (boxes.find((b: any) => b.specialUse === "\\Archive")?.path as string | undefined) ??
+      (boxes.find((b: any) => /archive/i.test(b.path))?.path as string | undefined) ??
+      (boxes.find((b: any) => b.specialUse === "\\All")?.path as string | undefined) ??
+      (boxes.find((b: any) => /all mail/i.test(b.path))?.path as string | undefined);
+    if (!archive) throw new Error("no Archive folder found");
+    await client.mailboxOpen(archive, { readOnly: false });
+    return uidMapOf(await client.messageMove(uids, acc.mailbox, { uid: true }));
   } finally {
     await client.logout();
   }

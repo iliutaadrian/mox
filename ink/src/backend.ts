@@ -3,7 +3,7 @@
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
 import { addSenderRule, loadConfig, type Account, type Config } from "./config.ts";
 import { refresh, applyRules } from "./engine.ts";
-import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages } from "./mail.ts";
+import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders } from "./mail.ts";
 
 export type Result = { ok: boolean; out: string };
 
@@ -28,6 +28,10 @@ export function backend(store: Store, cfg: Config, cfgPath: string) {
     async sync(): Promise<Result> {
       try {
         const { fetched, filed } = await refresh(store, cfg, true);
+        // Keep Trash/Archive in step with the server (removal-only, cheap).
+        await Promise.all(
+          cfg.accounts.map((a) => reconcileFolders(store, a, [CLASS_TRASH, CLASS_ARCHIVE]).catch(() => {})),
+        );
         return { ok: true, out: `fetched ${fetched}, filed ${filed} by rules` };
       } catch (e) {
         return { ok: false, out: String(e) };
@@ -133,6 +137,39 @@ export function backend(store: Store, cfg: Config, cfgPath: string) {
           }
         }
         return { ok: true, out: `archived ${n}` };
+      } catch (e) {
+        return { ok: false, out: String(e) };
+      }
+    },
+
+    // Restore messages from the server Archive back to the INBOX, keeping their
+    // existing category. Relabel local rows to INBOX with their new UIDs.
+    async unarchive(ids: number[]): Promise<Result> {
+      try {
+        const rows = store.byIds(ids);
+        const accs = accByName(cfg);
+        const byAcc = new Map<string, { acc: Account; rows: typeof rows }>();
+        for (const r of rows) {
+          const acc = accs.get(r.account);
+          if (!acc) continue;
+          let g = byAcc.get(r.account);
+          if (!g) {
+            g = { acc, rows: [] };
+            byAcc.set(r.account, g);
+          }
+          g.rows.push(r);
+        }
+        let n = 0;
+        for (const g of byAcc.values()) {
+          const uidMap = await unarchiveMessages(g.acc, g.rows.map((r) => r.uid));
+          for (const r of g.rows) {
+            const nu = uidMap.get(r.uid);
+            if (nu) store.setMailboxUid(r.id, CLASS_INBOX, nu);
+            else store.deleteByIds([r.id]);
+            n++;
+          }
+        }
+        return { ok: true, out: `unarchived ${n} to inbox` };
       } catch (e) {
         return { ok: false, out: String(e) };
       }

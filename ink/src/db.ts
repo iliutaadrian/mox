@@ -27,6 +27,7 @@ export type MessageRow = {
   subject: string;
   date: number; // unix seconds
   seen: number;
+  done: number;
   category: string;
   suggested_new: string;
 };
@@ -63,7 +64,6 @@ export type Filter =
   | { kind: "category"; name: string }
   | { kind: "folder"; class: string }
   | { kind: "search"; query: string }
-  | { kind: "snoozed" }
   | { kind: "done" };
 
 // neomutt-style query. Space-separated terms, AND-ed. Supports field operators
@@ -141,12 +141,12 @@ export function buildSearch(query: string): { where: string; params: any[] } | n
 
 const LIST_COLS = `id, account, mailbox, COALESCE(from_name,'') AS from_name,
   COALESCE(from_addr,'') AS from_addr, COALESCE(subject,'') AS subject,
-  date, seen, COALESCE(category,'') AS category,
+  date, seen, done, COALESCE(category,'') AS category,
   COALESCE(suggested_new,'') AS suggested_new`;
 
-// Inbox visibility: hide done mail and mail snoozed into the future. Applied to
-// every "inbox" read (list + sidebar counts) so done/snoozed drop out of view.
-const VISIBLE = `done=0 AND (snoozed_until=0 OR snoozed_until <= CAST(strftime('%s','now') AS INTEGER))`;
+// Inbox visibility: hide locally-done mail. Applied to every "inbox" read
+// (list + sidebar counts) so done mail drops out of the active views.
+const VISIBLE = `done=0`;
 
 export class Store {
   private db: Database;
@@ -205,26 +205,26 @@ CREATE TABLE IF NOT EXISTS approved_categories (
         return this.db.query(q).all(...f.exclude, limit) as MessageRow[];
       }
       case "all": {
-        // Everything not done, minus the excluded/muted categories.
+        // Everything (done + undone), minus the excluded/muted categories.
         const notIn = f.exclude.length ? `AND category NOT IN (${f.exclude.map(() => "?").join(",")})` : "";
-        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' AND done=0 ${notIn} ORDER BY date DESC LIMIT ?`).all(...f.exclude, limit) as MessageRow[];
+        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' ${notIn} ORDER BY date DESC LIMIT ?`).all(...f.exclude, limit) as MessageRow[];
       }
       case "account": {
+        // Accounts show both done and undone (done marked with a ✓ in the UI).
         const notIn = f.exclude.length ? `AND category NOT IN (${f.exclude.map(() => "?").join(",")})` : "";
-        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE account=? AND mailbox='INBOX' AND ${VISIBLE} ${notIn} ORDER BY date DESC LIMIT ?`).all(f.name, ...f.exclude, limit) as MessageRow[];
+        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE account=? AND mailbox='INBOX' ${notIn} ORDER BY date DESC LIMIT ?`).all(f.name, ...f.exclude, limit) as MessageRow[];
       }
       case "folder":
         return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox=? ORDER BY date DESC LIMIT ?`).all(f.class, limit) as MessageRow[];
-      case "snoozed":
-        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' AND done=0 AND snoozed_until > CAST(strftime('%s','now') AS INTEGER) ORDER BY snoozed_until ASC LIMIT ?`).all(limit) as MessageRow[];
       case "done":
         // DONE = locally-marked-done mail (a local-only flag, never touches the server).
         return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' AND done=1 ORDER BY date DESC LIMIT ?`).all(limit) as MessageRow[];
       case "category": {
+        // Categories show both done and undone (done marked with a ✓ in the UI).
         const where = f.name === UNCATEGORIZED
           ? "(category IS NULL OR category='' OR category='Uncategorized')"
           : "category=?";
-        const q = `SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' AND ${VISIBLE} AND ${where} ORDER BY date DESC LIMIT ?`;
+        const q = `SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' AND ${where} ORDER BY date DESC LIMIT ?`;
         return (f.name === UNCATEGORIZED ? this.db.query(q).all(limit) : this.db.query(q).all(f.name, limit)) as MessageRow[];
       }
       case "search": {
@@ -255,30 +255,27 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     return (this.db.query(`SELECT COUNT(*) AS n FROM messages WHERE mailbox='INBOX' AND ${VISIBLE} ${notIn}`).get(...exclude) as any).n;
   }
 
-  // ALL view count: everything not done, minus excluded/muted categories.
+  // ALL view count: everything (done + undone), minus excluded/muted categories.
   allCount(exclude: string[]): number {
     const notIn = exclude.length ? `AND category NOT IN (${exclude.map(() => "?").join(",")})` : "";
-    return (this.db.query(`SELECT COUNT(*) AS n FROM messages WHERE mailbox='INBOX' AND done=0 ${notIn}`).get(...exclude) as any).n;
-  }
-
-  snoozedCount(): number {
-    return (this.db.query("SELECT COUNT(*) AS n FROM messages WHERE mailbox='INBOX' AND done=0 AND snoozed_until > CAST(strftime('%s','now') AS INTEGER)").get() as any).n;
+    return (this.db.query(`SELECT COUNT(*) AS n FROM messages WHERE mailbox='INBOX' ${notIn}`).get(...exclude) as any).n;
   }
 
   doneCount(): number {
     return (this.db.query("SELECT COUNT(*) AS n FROM messages WHERE mailbox='INBOX' AND done=1").get() as any).n;
   }
 
+  // Accounts and categories count both done and undone (INBOX hides done, they don't).
   accountCounts(exclude: string[]): Map<string, number> {
     const notIn = exclude.length ? `AND category NOT IN (${exclude.map(() => "?").join(",")})` : "";
-    const rows = this.db.query(`SELECT account, COUNT(*) AS n FROM messages WHERE mailbox='INBOX' AND ${VISIBLE} ${notIn} GROUP BY account`).all(...exclude) as { account: string; n: number }[];
+    const rows = this.db.query(`SELECT account, COUNT(*) AS n FROM messages WHERE mailbox='INBOX' ${notIn} GROUP BY account`).all(...exclude) as { account: string; n: number }[];
     return new Map(rows.map((r) => [r.account, r.n]));
   }
 
   categoryCounts(): Map<string, number> {
     const rows = this.db.query(
       `SELECT COALESCE(NULLIF(category,''),'Uncategorized') AS c, COUNT(*) AS n
-       FROM messages WHERE mailbox='INBOX' AND ${VISIBLE} GROUP BY c`,
+       FROM messages WHERE mailbox='INBOX' GROUP BY c`,
     ).all() as { c: string; n: number }[];
     return new Map(rows.map((r) => [r.c, r.n]));
   }
@@ -370,14 +367,6 @@ CREATE TABLE IF NOT EXISTS approved_categories (
   setDone(ids: number[], done: boolean) {
     const stmt = this.db.query("UPDATE messages SET done=? WHERE id=?");
     const tx = this.db.transaction(() => ids.forEach((id) => stmt.run(done ? 1 : 0, id)));
-    tx();
-  }
-
-  /** Snooze messages until a unix timestamp (0 clears). Hidden from the inbox
-   * until then, then they reappear automatically. */
-  setSnooze(ids: number[], until: number) {
-    const stmt = this.db.query("UPDATE messages SET snoozed_until=? WHERE id=?");
-    const tx = this.db.transaction(() => ids.forEach((id) => stmt.run(until, id)));
     tx();
   }
 
