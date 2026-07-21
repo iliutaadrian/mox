@@ -1,3 +1,6 @@
+# dependencies
+node_modules/
+
 # local data + secrets (never commit)
 *.db
 config.yaml

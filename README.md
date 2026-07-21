@@ -21,19 +21,19 @@ Requires [Bun](https://bun.sh). Optional: `lynx` (HTML→text in the reading pan
 and `bat` are not required. `open` is used to launch links/HTML in a browser.
 
 ```bash
-cd ink && bun install
+bun install
 ```
 
 **Run from source (dev):**
 
 ```bash
-./spark            # launcher → bun ink/src/index.tsx (uses ./config.yaml)
+./spark            # launcher → bun src/index.tsx (uses ./config.yaml)
 ```
 
 **Install as a standalone binary (like neomutt):**
 
 ```bash
-cd ink && bun run install-bin        # builds + installs to ~/.local/bin/spark
+bun run install-bin        # builds + installs to ~/.local/bin/spark
 # or choose a location:
 PREFIX=/usr/local/bin bun run install-bin
 ```
@@ -75,8 +75,8 @@ reconciles **Trash/Archive** (drops local rows removed on the server). Deeper
 folder syncs / backfills run headless:
 
 ```bash
-bun ink/src/cli.ts sync                 # fetch ALL folders + rule-file, exit
-bun ink/src/cli.ts attach <id> [name]   # download an attachment on demand
+bun src/cli.ts sync                 # fetch ALL folders + rule-file, exit
+bun src/cli.ts attach <id> [name]   # download an attachment on demand
 ```
 
 ## Keys
@@ -126,10 +126,10 @@ IMAP  →  local SQLite (body + html + local category/done columns)
         Ink TUI groups the inbox by category
 ```
 
-- `ink/src/config.ts` — YAML config: accounts, categories, `match` rules.
-- `ink/src/db.ts`     — bun:sqlite store; category/done are local-only columns.
-- `ink/src/mail.ts`   — imapflow fetch + mailparser; pooled connections; server moves.
-- `ink/src/engine.ts` — fetch → rule-file → persist.
-- `ink/src/backend.ts`— in-process actions (sync/mark/move/archive/trash + inverses).
-- `ink/src/app.tsx`   — Ink/React interface.
-- `ink/src/cli.ts`    — headless entry (`sync`, `attach`).
+- `src/config.ts` — YAML config: accounts, categories, `match` rules.
+- `src/db.ts`     — bun:sqlite store; category/done are local-only columns.
+- `src/mail.ts`   — imapflow fetch + mailparser; pooled connections; server moves.
+- `src/engine.ts` — fetch → rule-file → persist.
+- `src/backend.ts`— in-process actions (sync/mark/move/archive/trash + inverses).
+- `src/app.tsx`   — Ink/React interface.
+- `src/cli.ts`    — headless entry (`sync`, `attach`).

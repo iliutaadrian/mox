@@ -12,7 +12,7 @@ import { App } from "./app.tsx";
 
 // Locate config.yaml: $SPARK_CONFIG, then the repo root (dev), then the standard
 // per-user location. The SQLite store lives next to it ($SPARK_DB overrides).
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const xdgConfig = join(homedir(), ".config", "spark-cli", "config.yaml");
 const cfgPath =
   [process.env.SPARK_CONFIG, join(repoRoot, "config.yaml"), xdgConfig].find((p) => p && existsSync(p)) ?? xdgConfig;

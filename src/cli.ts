@@ -13,9 +13,10 @@ import { loadConfig } from "./config.ts";
 import { refresh } from "./engine.ts";
 import { detectFolders, fetchAttachment } from "./mail.ts";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const store = new Store(join(repoRoot, "spark-cli.db"));
-const cfg = loadConfig(join(repoRoot, "config.yaml"));
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const cfgPath = process.env.SPARK_CONFIG ?? join(repoRoot, "config.yaml");
+const store = new Store(process.env.SPARK_DB ?? join(dirname(cfgPath), "spark-cli.db"));
+const cfg = loadConfig(cfgPath);
 
 const [cmd, ...rest] = process.argv.slice(2);
 

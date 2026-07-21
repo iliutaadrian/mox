@@ -17,8 +17,8 @@
     "start": "bun src/index.tsx",
     "sync": "bun src/cli.ts sync",
     "typecheck": "tsc --noEmit",
-    "build": "bun build --compile --minify --outfile ../dist/spark src/index.tsx",
-    "install-bin": "bun run build && install -m 0755 ../dist/spark \"${PREFIX:-$HOME/.local/bin}/spark\" && echo installed to ${PREFIX:-$HOME/.local/bin}/spark"
+    "build": "bun build --compile --minify --outfile dist/spark src/index.tsx",
+    "install-bin": "bun run build && install -m 0755 dist/spark \"${PREFIX:-$HOME/.local/bin}/spark\" && echo installed to ${PREFIX:-$HOME/.local/bin}/spark"
   },
   "devDependencies": {
     "@types/mailparser": "^3.4.6",
