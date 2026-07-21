@@ -1,8 +1,8 @@
 // Actions the TUI triggers, run IN-PROCESS (no subprocess). Each returns
 // {ok, out} for the status line. Writes to the server happen only in mark().
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
-import { addSenderRule, loadConfig, type Account, type Config } from "./config.ts";
-import { refresh, applyRules } from "./engine.ts";
+import { type Account, type Config } from "./config.ts";
+import { refresh } from "./engine.ts";
 import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders } from "./mail.ts";
 
 export type Result = { ok: boolean; out: string };
@@ -22,7 +22,7 @@ async function folderName(cache: Map<string, Map<string, string>>, acc: Account,
   return m.get(cls) ?? acc.mailbox;
 }
 
-export function backend(store: Store, cfg: Config, cfgPath: string) {
+export function backend(store: Store, cfg: Config) {
   return {
     // Interactive refresh: INBOX only (fast). Folders sync via `cli sync`.
     async sync(): Promise<Result> {
@@ -214,30 +214,6 @@ export function backend(store: Store, cfg: Config, cfgPath: string) {
         return { ok: true, out: `moved ${ids.length} to ${category}` };
       } catch (e) {
         return { ok: false, out: String(e) };
-      }
-    },
-
-    // Create a sender-domain rule from the given messages' senders, persist it
-    // to config.yaml, then re-home matching INBOX mail. Returns the reloaded
-    // config (caller swaps it in) plus a result.
-    rule(ids: number[], category: string): { res: Result; cfg?: Config } {
-      try {
-        const rows = store.byIds(ids);
-        const full = rows.map((r) => store.full(r.id)).filter(Boolean);
-        const domains = new Set<string>();
-        for (const m of full) {
-          const addr = (m!.from_addr || "").toLowerCase();
-          const i = addr.lastIndexOf("@");
-          if (i >= 0) domains.add(addr.slice(i + 1));
-        }
-        if (domains.size === 0) return { res: { ok: false, out: "no sender domains in selection" } };
-        addSenderRule(cfgPath, category, [...domains].sort(), []);
-        // Reload config from disk and apply.
-        const reloaded = loadConfig(cfgPath);
-        const n = applyRules(store, reloaded);
-        return { res: { ok: true, out: `rule: ${[...domains].join(", ")} → ${category} (${n} moved)` }, cfg: reloaded };
-      } catch (e) {
-        return { res: { ok: false, out: String(e) } };
       }
     },
   };

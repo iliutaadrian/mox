@@ -1,7 +1,7 @@
-// spark-ink — Ink/React TUI over the Go spark-cli backend. Layout and
-// keybindings mirror the Go TUI: sidebar (All / mailboxes / manual / other),
-// message list, reading view. Reads sqlite directly; every write shells out to
-// the Go binary. Filing is by sender rules only — no AI classification.
+// spark-cli TUI (Ink/React). Sidebar (INBOX / Mailboxes / Filters / Other /
+// Folders) + message list + reading view, all reading/writing the local SQLite
+// store in-process. Mail is filed deterministically by config rules; server
+// writes are limited to mark-read, archive, trash and their inverses.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { spawn, spawnSync } from "node:child_process";
@@ -23,15 +23,13 @@ const DIM = "#808080";
 const CAT = "#87afaf";
 const DONE = "#5faf5f"; // ✓ marker for done mail (shown in non-inbox views)
 
-// Snooze durations offered in the picker (label → seconds from now).
 type SideEntry =
   | { kind: "inbox"; label: string; exclude: string[] }
   | { kind: "all"; label: string; exclude: string[] }
   | { kind: "header"; label: string }
   | { kind: "account"; name: string; label: string; exclude: string[] }
   | { kind: "category"; name: string; label: string }
-  | { kind: "folder"; cls: string; label: string }
-  | { kind: "done"; label: string };
+  | { kind: "folder"; cls: string; label: string };
 
 function buildSidebar(store: Store, cfg: Config): SideEntry[] {
   const ex = cfg.inboxExclude;
@@ -91,7 +89,6 @@ function filterOf(e: SideEntry): Filter {
   if (e.kind === "account") return { kind: "account", name: e.name, exclude: e.exclude };
   if (e.kind === "category") return { kind: "category", name: e.name };
   if (e.kind === "folder") return { kind: "folder", class: e.cls };
-  if (e.kind === "done") return { kind: "done" };
   return { kind: "all", exclude: e.kind === "all" ? e.exclude : [] };
 }
 
@@ -129,8 +126,8 @@ export function App({
   const { exit } = useApp();
   const { stdout } = useStdout();
   const store = useMemo(() => new Store(dbPath), [dbPath]);
-  const [cfg, setCfg] = useState<Config>(() => loadConfig(cfgPath));
-  const be = useMemo(() => backend(store, cfg, cfgPath), [store, cfg, cfgPath]);
+  const [cfg] = useState<Config>(() => loadConfig(cfgPath));
+  const be = useMemo(() => backend(store, cfg), [store, cfg]);
 
   const [size, setSize] = useState({ cols: stdout.columns, rows: stdout.rows });
   useEffect(() => {
@@ -183,13 +180,43 @@ export function App({
     return cache.get(key)!;
   }, [opened, listW]);
 
-  // Move the cursor immediately (no throttle — throttling made held keys feel
-  // laggy). Synchronized-output frames keep rapid moves from tearing.
+  // Cursor coalescing: a held j/k fires many key-repeat events; committing a
+  // React render on each one storms the terminal (the "refresh every frame"
+  // glitch). We update a ref instantly — so there's no input lag — but commit to
+  // state at ~30fps (leading + trailing), collapsing bursts into a few frames
+  // while the final cursor position stays exact.
   const msgsLenRef = useRef(0);
   msgsLenRef.current = msgs.length;
+  const idxRef = useRef(0);
+  const flushT = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastCommit = useRef(0);
+  function commitIdx() {
+    if (flushT.current) {
+      clearTimeout(flushT.current);
+      flushT.current = null;
+    }
+    setMsgIdx(idxRef.current);
+  }
+  // Instant cursor set — for jumps, resets and clicks (not key-repeat).
+  function moveTo(n: number) {
+    idxRef.current = Math.max(0, Math.min(n, msgsLenRef.current - 1));
+    lastCommit.current = Date.now();
+    commitIdx();
+  }
+  // Throttled relative move — for held j/k and the mouse wheel.
   function scrollList(delta: number, resetScroll = false) {
-    setMsgIdx((i) => Math.max(0, Math.min(i + delta, msgsLenRef.current - 1)));
+    idxRef.current = Math.max(0, Math.min(idxRef.current + delta, msgsLenRef.current - 1));
     if (resetScroll) setScroll(0);
+    const now = Date.now();
+    if (now - lastCommit.current >= 33) {
+      lastCommit.current = now;
+      commitIdx();
+    } else if (!flushT.current) {
+      flushT.current = setTimeout(() => {
+        lastCommit.current = Date.now();
+        commitIdx();
+      }, 33);
+    }
   }
 
   const targets = (): number[] =>
@@ -232,7 +259,7 @@ export function App({
         setTyping(false);
         setSearch(draft.trim() ? draft.trim() : null);
         setFocus("list");
-        setMsgIdx(0);
+        moveTo(0);
       } else if (key.backspace || key.delete) {
         setDraft((d) => d.slice(0, -1));
       } else if (input && !key.ctrl && !key.meta) {
@@ -310,7 +337,7 @@ export function App({
       setDraft(search ?? "");
     } else if (key.escape && search !== null) {
       setSearch(null); // clear search, back to sidebar filter
-      setMsgIdx(0);
+      moveTo(0);
     } else if (key.return && current) setMode("reading");
     else if (key.tab || input === "h" || input === "l" || key.leftArrow || key.rightArrow)
       setFocus(focus === "sidebar" ? "list" : "sidebar");
@@ -318,19 +345,19 @@ export function App({
       if (focus === "sidebar") {
         setSearch(null);
         setCatIdx(nextSelectable(entries, safeCatIdx, 1));
-        setMsgIdx(0);
+        moveTo(0);
       } else scrollList(1);
     } else if (input === "k" || key.upArrow) {
       if (focus === "sidebar") {
         setSearch(null);
         setCatIdx(nextSelectable(entries, safeCatIdx, -1));
-        setMsgIdx(0);
+        moveTo(0);
       } else scrollList(-1);
     } else if (input === " " && current) {
       const next = new Set(selected);
       next.has(current.id) ? next.delete(current.id) : next.add(current.id);
       setSelected(next);
-      setMsgIdx(Math.min(safeMsgIdx + 1, msgs.length - 1));
+      moveTo(safeMsgIdx + 1);
     } else if (key.escape) setSelected(new Set());
     else if (input === "r") void doBackend("Fetching new mail", () => be.sync());
     else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
@@ -389,7 +416,7 @@ export function App({
       if (focus === "sidebar") {
         setSearch(null);
         setCatIdx((i) => nextSelectable(entries, Math.min(i, entries.length - 1), 1));
-        setMsgIdx(0);
+        moveTo(0);
       } else scrollList(3);
       return;
     }
@@ -397,7 +424,7 @@ export function App({
       if (focus === "sidebar") {
         setSearch(null);
         setCatIdx((i) => nextSelectable(entries, Math.min(i, entries.length - 1), -1));
-        setMsgIdx(0);
+        moveTo(0);
       } else scrollList(-3);
       return;
     }
@@ -411,14 +438,14 @@ export function App({
         setSearch(null);
         setFocus("sidebar");
         setCatIdx(abs);
-        setMsgIdx(0);
+        moveTo(0);
       }
     } else {
       const abs = winStart + contentRow;
       if (abs < msgs.length) {
         setFocus("list");
         if (abs === safeMsgIdx) setMode("reading"); // click current row = open
-        else setMsgIdx(abs);
+        else moveTo(abs);
       }
     }
   });

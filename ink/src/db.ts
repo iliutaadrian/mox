@@ -63,8 +63,7 @@ export type Filter =
   | { kind: "account"; name: string; exclude: string[] }
   | { kind: "category"; name: string }
   | { kind: "folder"; class: string }
-  | { kind: "search"; query: string }
-  | { kind: "done" };
+  | { kind: "search"; query: string };
 
 // neomutt-style query. Space-separated terms, AND-ed. Supports field operators
 // and quoted phrases:
@@ -216,9 +215,6 @@ CREATE TABLE IF NOT EXISTS approved_categories (
       }
       case "folder":
         return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox=? ORDER BY date DESC LIMIT ?`).all(f.class, limit) as MessageRow[];
-      case "done":
-        // DONE = locally-marked-done mail (a local-only flag, never touches the server).
-        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' AND done=1 ORDER BY date DESC LIMIT ?`).all(limit) as MessageRow[];
       case "category": {
         // Categories show both done and undone (done marked with a ✓ in the UI).
         const where = f.name === UNCATEGORIZED
@@ -259,10 +255,6 @@ CREATE TABLE IF NOT EXISTS approved_categories (
   allCount(exclude: string[]): number {
     const notIn = exclude.length ? `AND category NOT IN (${exclude.map(() => "?").join(",")})` : "";
     return (this.db.query(`SELECT COUNT(*) AS n FROM messages WHERE mailbox='INBOX' ${notIn}`).get(...exclude) as any).n;
-  }
-
-  doneCount(): number {
-    return (this.db.query("SELECT COUNT(*) AS n FROM messages WHERE mailbox='INBOX' AND done=1").get() as any).n;
   }
 
   // Accounts and categories count both done and undone (INBOX hides done, they don't).
@@ -338,13 +330,6 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     return this.db.query(
       "SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(from_name,'') AS from_name, COALESCE(subject,'') AS subject, COALESCE(attachments,'') AS attachments FROM messages WHERE category IS NULL AND mailbox='INBOX' ORDER BY date DESC LIMIT ?",
     ).all(limit) as { id: number; from_addr: string; from_name: string; subject: string; attachments: string }[];
-  }
-
-  /** INBOX rows needed to re-home mail when a new rule is added. */
-  inboxForRules(): { id: number; from_addr: string; from_name: string; category: string; source: string; subject: string }[] {
-    return this.db.query(
-      "SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(from_name,'') AS from_name, COALESCE(category,'') AS category, COALESCE(source,'') AS source, COALESCE(subject,'') AS subject FROM messages WHERE mailbox='INBOX'",
-    ).all() as any;
   }
 
   setClassification(id: number, category: string, source: string) {

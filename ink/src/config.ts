@@ -1,8 +1,8 @@
-// Config: reads config.yaml (accounts + categories). Mirrors the former Go
-// internal/config. A category with a `match` block of sender rules is "manual"
-// (filed deterministically); one without holds only manually-moved mail.
-import { readFileSync, writeFileSync } from "node:fs";
-import { parse, parseDocument, YAMLSeq, YAMLMap } from "yaml";
+// Config: reads config.yaml (accounts + categories). A category with a `match`
+// block (domains / addresses / subject-or-sender words) files mail
+// deterministically; one without holds only manually-moved mail.
+import { readFileSync } from "node:fs";
+import { parse } from "yaml";
 
 export type Account = {
   name: string;
@@ -28,10 +28,6 @@ export type Config = {
   fetchSinceDays: number;
   inboxExclude: string[]; // category names kept OUT of the INBOX view (still in ALL)
 };
-
-export function categoryHasRules(c: Category): boolean {
-  return !!c.match && ((c.match.domains?.length ?? 0) > 0 || (c.match.addresses?.length ?? 0) > 0 || (c.match.words?.length ?? 0) > 0);
-}
 
 export function loadConfig(path: string): Config {
   const raw = parse(readFileSync(path, "utf8")) ?? {};
@@ -94,36 +90,3 @@ export function matchCategory(cfg: Config, fromAddr: string, subject = "", fromN
   return "";
 }
 
-/**
- * addSenderRule appends domains (and addresses) to the named category's match
- * block in config.yaml, preserving comments/formatting. Creates the category
- * if missing. Used by the in-app "create rule" (A) action.
- */
-export function addSenderRule(path: string, category: string, domains: string[], addresses: string[]) {
-  const doc = parseDocument(readFileSync(path, "utf8"));
-  let cats = doc.get("categories") as YAMLSeq | undefined;
-  if (!cats) {
-    cats = new YAMLSeq();
-    doc.set("categories", cats);
-  }
-  let node = cats.items.find((it: any) => (it as YAMLMap)?.get("name") === category) as YAMLMap | undefined;
-  if (!node) {
-    node = new YAMLMap();
-    node.set("name", category);
-    cats.add(node);
-  }
-  let match = node.get("match") as YAMLMap | undefined;
-  if (!match) {
-    match = new YAMLMap();
-    node.set("match", match);
-  }
-  const merge = (key: string, add: string[]) => {
-    if (add.length === 0) return;
-    const cur = (match!.get(key) as YAMLSeq | undefined)?.toJSON?.() ?? [];
-    const set = new Set<string>([...cur.map(String), ...add]);
-    match!.set(key, [...set].sort()); // plain array -> yaml builds the seq node
-  };
-  merge("domains", domains);
-  merge("addresses", addresses);
-  writeFileSync(path, doc.toString());
-}
