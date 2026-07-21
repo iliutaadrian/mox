@@ -1,19 +1,29 @@
-// Entry point: alt-screen wrapper around the Ink app. Run from the repo root:
-//   bun ink/src/index.tsx
+// Entry point: alt-screen wrapper around the Ink app.
+//   dev:        bun ink/src/index.tsx      (uses ./config.yaml at the repo root)
+//   installed:  spark                      (uses ~/.config/spark-cli/config.yaml)
 import React from "react";
 import { render } from "ink";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { App } from "./app.tsx";
 
+// Locate config.yaml: $SPARK_CONFIG, then the repo root (dev), then the standard
+// per-user location. The SQLite store lives next to it ($SPARK_DB overrides).
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const dbPath = join(repoRoot, "spark-cli.db");
-const cfgPath = join(repoRoot, "config.yaml");
+const xdgConfig = join(homedir(), ".config", "spark-cli", "config.yaml");
+const cfgPath =
+  [process.env.SPARK_CONFIG, join(repoRoot, "config.yaml"), xdgConfig].find((p) => p && existsSync(p)) ?? xdgConfig;
+const dbPath = process.env.SPARK_DB ?? join(dirname(cfgPath), "spark-cli.db");
 
 if (!existsSync(cfgPath)) {
-  console.error(`missing ${cfgPath} — copy config.example.yaml to config.yaml and edit`);
+  mkdirSync(dirname(xdgConfig), { recursive: true });
+  console.error(
+    `no config found — create ${xdgConfig} (copy config.example.yaml and edit),\n` +
+      `or set $SPARK_CONFIG to your config path.`,
+  );
   process.exit(1);
 }
 // dbPath is created on first run if absent.

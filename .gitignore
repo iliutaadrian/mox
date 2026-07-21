@@ -13,3 +13,6 @@ fetch.log
 
 # local db backups
 *.db.bak
+
+# compiled standalone binary
+/dist/

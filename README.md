@@ -1,66 +1,78 @@
 # spark-cli
 
 A fast terminal email client with **Spark-style categorization**, written in
-TypeScript (Ink/React on [Bun](https://bun.sh)). It fetches your mail over IMAP,
-files each message by deterministic sender rules, and presents a LazyGit-style
-three-pane inbox grouped by category.
+TypeScript (Ink/React on [Bun](https://bun.sh)). It fetches your mail over IMAP
+into a local SQLite store, files each message by deterministic rules, and shows
+a three-pane inbox grouped by category.
 
-> **Categorize, not label.** The category lives only in a local SQLite
-> database. spark-cli **never writes anything back to the mail server** — no
-> labels, no folder moves, no flag changes (except an explicit read/unread on
-> `M`/`U`). Your mailbox is otherwise untouched; the categorization is purely
-> how this client chooses to display it, like Spark's Smart Inbox.
+> **Categorize locally.** Categories live only in the local SQLite database —
+> no labels or folders are created on the server. The only server writes are the
+> explicit triage actions: mark read/unread (`M`/`U`), archive (`a`), and trash
+> (`d`), each with an inverse (`u`). Marking an email **done** (`e`) is
+> local-only and never touches the server.
 
-No AI/LLM: categorization is rule-based and instant. Anything a rule doesn't
-claim lands in **Uncategorized**; sort it externally (e.g. Claude Code) if you
-want. No API keys or environment variables required.
-
-## Features
-
-- **Multiple IMAP accounts**, read-only, UID-incremental fetch (fast refresh).
-- **All folders**: INBOX plus **Sent / Spam / Archive** (auto-detected via IMAP
-  special-use), browsable in the sidebar.
-- **Rule-based categories** — give a category a `match` of sender
-  domains/addresses; matching mail is filed there deterministically. Create
-  rules in `config.yaml` or in-app (`A`).
-- **Full-text search** (`/`) over subject, sender, body.
-- **Mouse**: click to select, wheel to scroll.
-- **HTML rendered on open**: opening an email shows it as readable text (`lynx`) right in the reading pane.
-- **Pager** (`i`): the same rendering in `bat` (paged, themed) for long mail.
-- **Open URLs** (`u`): pick any link in the message and open it in the browser.
-- **Three-pane TUI**: category sidebar │ message list │ reading pane.
+No AI/LLM in the client — categorization is rule-based and instant. Anything a
+rule doesn't claim lands in **Uncategorized**; sort it externally (e.g. Claude
+Code operating on the SQLite store) if you want. No API keys required.
 
 ## Install
 
+Requires [Bun](https://bun.sh). Optional: `lynx` (HTML→text in the reading pane)
+and `bat` are not required. `open` is used to launch links/HTML in a browser.
+
 ```bash
-cd ink && bun install && cd ..
+cd ink && bun install
 ```
 
-Requires [Bun](https://bun.sh). Optional: `bat` + `lynx` for the `i` preview.
+**Run from source (dev):**
+
+```bash
+./spark            # launcher → bun ink/src/index.tsx (uses ./config.yaml)
+```
+
+**Install as a standalone binary (like neomutt):**
+
+```bash
+cd ink && bun run install-bin        # builds + installs to ~/.local/bin/spark
+# or choose a location:
+PREFIX=/usr/local/bin bun run install-bin
+```
+
+`bun run build` alone produces `dist/spark`, a single self-contained executable
+(no Bun or node_modules needed at runtime).
 
 ## Configure
 
 ```bash
-cp config.example.yaml config.yaml
+cp config.example.yaml config.yaml   # dev: keep it at the repo root
+# installed binary looks in ~/.config/spark-cli/config.yaml
 $EDITOR config.yaml
 ```
 
-Set your IMAP accounts and the category set. For Gmail, use an
-[App Password](https://support.google.com/accounts/answer/185833), not your
-account password.
+Config lookup order: `$SPARK_CONFIG` → `./config.yaml` (repo, dev) →
+`~/.config/spark-cli/config.yaml`. The SQLite store is created next to the
+config (`$SPARK_DB` overrides). For Gmail/Yahoo use an **App Password**.
 
-## Run
+Categories are matched top-to-bottom; the first `match` that claims a message
+wins, so **order is precedence**. A `match` supports:
 
-```bash
-./spark                 # launcher (bun ink/src/index.tsx)
+```yaml
+- name: Work
+  match:
+    domains:   [company.com]              # sender domain (also matches subdomains)
+    addresses: [alerts@honeybadger.io]    # exact sender address
+    words:     [invoice, standup]         # case-insensitive substring of SUBJECT or SENDER NAME
 ```
 
-The db is created next to `config.yaml` (`./spark-cli.db`) on first run. IMAP
-connections are pooled and pre-warmed at startup, so `r` refreshes fast.
+Categories without a `match` are manual-only buckets. `inbox_exclude: [Muted]`
+keeps noisy categories out of INBOX and ALL (still reachable via their own
+entry).
 
-In-app `r` refreshes the **INBOX** only (fast). **Sent/Spam/Archive** change
-rarely — refresh them (and do bulk backfills after raising `fetch_since_days`)
-headless:
+## Refresh & headless
+
+`r` refreshes the **INBOX** (fast: pooled, pre-warmed IMAP connections) and
+reconciles **Trash/Archive** (drops local rows removed on the server). Deeper
+folder syncs / backfills run headless:
 
 ```bash
 bun ink/src/cli.ts sync                 # fetch ALL folders + rule-file, exit
@@ -69,58 +81,55 @@ bun ink/src/cli.ts attach <id> [name]   # download an attachment on demand
 
 ## Keys
 
-The inbox opens as a **full-width list**. Press `enter` to open the highlighted
-email; `esc`/`q` returns to the list.
-
 **List view**
 
-| Key            | Action                                                  |
-| -------------- | ------------------------------------------------------- |
-| `enter`        | Open the highlighted email                              |
-| `i`            | Preview the email (lynx→bat, paged)                     |
-| `u`            | List URLs in the email, open one in the browser         |
-| `/`            | Full-text search                                        |
-| `r`            | Fetch new mail + file by rules                          |
-| `tab` / `h` `l`| Switch focus between sidebar and message list           |
-| `j` / `k` (↑↓) | Move within the focused pane                            |
-| `space`        | Select / deselect (LazyGit-style multi-select)          |
-| `m`            | Move the selection to a category                        |
-| `A`            | Create a sender rule from the selection → a category    |
-| `M` / `U`      | Mark selection read / unread **on the server**          |
-| `esc`          | Clear the selection (or search)                         |
-| `q`            | Quit                                                    |
+| Key             | Action                                             |
+| --------------- | -------------------------------------------------- |
+| `enter`         | Open the highlighted email                         |
+| `j`/`k` (↑↓)    | Move cursor / scroll                               |
+| `tab` / `h` `l` | Switch focus between sidebar and list              |
+| `space`         | Select / deselect (multi-select)                   |
+| `e`             | **Done** — hide from INBOX (local only)            |
+| `a`             | **Archive** on the server                          |
+| `d`             | **Trash** on the server                            |
+| `u`             | **Restore** — undone / unarchive / untrash         |
+| `m`             | Move the selection to a category                   |
+| `M` / `U`       | Mark read / unread **on the server**               |
+| `/`             | Full-text search (`from:` `subject:` `is:unread` …)|
+| `r`             | Fetch new mail + reconcile Trash/Archive           |
+| `esc`           | Clear selection / search                           |
+| `q`             | Quit                                               |
 
 **Reading view**
 
-| Key            | Action                                                  |
-| -------------- | ------------------------------------------------------- |
-| `j` / `k`      | Next / previous email                                   |
-| `ctrl+u/d`     | Scroll the email                                        |
-| `i`            | Preview the email (lynx→bat, paged)                     |
-| `u`            | List URLs in the email, open one in the browser         |
-| `v`            | Open the full HTML email in your browser                |
-| `M` / `U`      | Mark read / unread on the server                        |
-| `esc` / `q`    | Back to the list                                        |
+| Key          | Action                                  |
+| ------------ | --------------------------------------- |
+| `j` / `k`    | Scroll the email                        |
+| `h` / `l`    | Previous / next email                   |
+| `v`          | Open the full HTML email in the browser |
+| `e`/`a`/`d`  | Done / archive / trash                  |
+| `u`          | Restore (in Trash/Archive/done)         |
+| `M` / `U`    | Mark read / unread on the server        |
+| `esc` / `q`  | Back to the list                        |
 
-The sidebar: **All** (INBOX across accounts) · **Mailboxes** (per-account INBOX,
-if >1 account) · **Manual** (rule categories) · **Other** (manually-moved
-categories + **Uncategorized**) · **Folders** (Sent/Spam/Archive across
-accounts). Category buckets span all accounts.
+**Sidebar:** **INBOX** (active, undone only) · **Mailboxes** (ALL + per-account,
+show everything with a `✓` on done mail) · **Filters** (your categories) ·
+**Other** (Uncategorized etc.) · **Folders** (Sent / Spam / Archived / Trash).
 
 ## How it works
 
 ```
-IMAP (read-only)  →  local SQLite (message + local category column)
-                            ↓
-                  sender rules file each INBOX message (deterministic)
-                            ↓
-                  TUI groups the inbox by category (Spark-style)
+IMAP  →  local SQLite (body + html + local category/done columns)
+              ↓
+        config rules file each INBOX message (first match wins)
+              ↓
+        Ink TUI groups the inbox by category
 ```
 
-- `ink/src/config.ts` — YAML config (accounts, categories, rules).
-- `ink/src/db.ts`     — bun:sqlite store; the category is a local-only column.
-- `ink/src/mail.ts`   — imapflow fetch + mailparser MIME. Read-only (bar `M`/`U`).
-- `ink/src/engine.ts` — orchestration: fetch → rule-file → persist.
-- `ink/src/backend.ts`— in-process actions the TUI triggers (sync/mark/move/rule).
+- `ink/src/config.ts` — YAML config: accounts, categories, `match` rules.
+- `ink/src/db.ts`     — bun:sqlite store; category/done are local-only columns.
+- `ink/src/mail.ts`   — imapflow fetch + mailparser; pooled connections; server moves.
+- `ink/src/engine.ts` — fetch → rule-file → persist.
+- `ink/src/backend.ts`— in-process actions (sync/mark/move/archive/trash + inverses).
 - `ink/src/app.tsx`   — Ink/React interface.
 - `ink/src/cli.ts`    — headless entry (`sync`, `attach`).
