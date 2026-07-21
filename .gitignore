@@ -10,3 +10,6 @@ fetch.log
 # sqlite WAL sidecars
 *.db-shm
 *.db-wal
+
+# local db backups
+*.db.bak
