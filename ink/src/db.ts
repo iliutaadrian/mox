@@ -11,8 +11,7 @@ export const CLASS_SENT = "Sent";
 export const CLASS_SPAM = "Spam";
 export const CLASS_ARCHIVE = "Archive";
 export const CLASS_TRASH = "Trash";
-// Archive is surfaced as the top-level DONE view, so it's not repeated here.
-export const FOLDER_CLASSES = [CLASS_SENT, CLASS_SPAM, CLASS_TRASH] as const;
+export const FOLDER_CLASSES = [CLASS_SENT, CLASS_SPAM, CLASS_ARCHIVE, CLASS_TRASH] as const;
 
 export const SOURCE_RULE = "rule";
 export const SOURCE_MANUAL = "manual";
@@ -219,8 +218,8 @@ CREATE TABLE IF NOT EXISTS approved_categories (
       case "snoozed":
         return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' AND done=0 AND snoozed_until > CAST(strftime('%s','now') AS INTEGER) ORDER BY snoozed_until ASC LIMIT ?`).all(limit) as MessageRow[];
       case "done":
-        // DONE = the server Archive folder (archived mail lives there now).
-        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox='Archive' ORDER BY date DESC LIMIT ?`).all(limit) as MessageRow[];
+        // DONE = locally-marked-done mail (a local-only flag, never touches the server).
+        return this.db.query(`SELECT ${LIST_COLS} FROM messages WHERE mailbox='INBOX' AND done=1 ORDER BY date DESC LIMIT ?`).all(limit) as MessageRow[];
       case "category": {
         const where = f.name === UNCATEGORIZED
           ? "(category IS NULL OR category='' OR category='Uncategorized')"
@@ -267,7 +266,7 @@ CREATE TABLE IF NOT EXISTS approved_categories (
   }
 
   doneCount(): number {
-    return (this.db.query("SELECT COUNT(*) AS n FROM messages WHERE mailbox='Archive'").get() as any).n;
+    return (this.db.query("SELECT COUNT(*) AS n FROM messages WHERE mailbox='INBOX' AND done=1").get() as any).n;
   }
 
   accountCounts(exclude: string[]): Map<string, number> {
@@ -286,7 +285,7 @@ CREATE TABLE IF NOT EXISTS approved_categories (
 
   folderCounts(): Map<string, number> {
     const rows = this.db.query(
-      `SELECT mailbox, COUNT(*) AS n FROM messages WHERE mailbox IN ('Sent','Spam','Trash') GROUP BY mailbox`,
+      `SELECT mailbox, COUNT(*) AS n FROM messages WHERE mailbox IN ('Sent','Spam','Archive','Trash') GROUP BY mailbox`,
     ).all() as { mailbox: string; n: number }[];
     return new Map(rows.map((r) => [r.mailbox, r.n]));
   }
@@ -338,16 +337,16 @@ CREATE TABLE IF NOT EXISTS approved_categories (
   }
 
   /** INBOX messages with no category yet (folders keep null category). */
-  unclassified(limit: number): { id: number; from_addr: string; subject: string; attachments: string }[] {
+  unclassified(limit: number): { id: number; from_addr: string; from_name: string; subject: string; attachments: string }[] {
     return this.db.query(
-      "SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(subject,'') AS subject, COALESCE(attachments,'') AS attachments FROM messages WHERE category IS NULL AND mailbox='INBOX' ORDER BY date DESC LIMIT ?",
-    ).all(limit) as { id: number; from_addr: string; subject: string; attachments: string }[];
+      "SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(from_name,'') AS from_name, COALESCE(subject,'') AS subject, COALESCE(attachments,'') AS attachments FROM messages WHERE category IS NULL AND mailbox='INBOX' ORDER BY date DESC LIMIT ?",
+    ).all(limit) as { id: number; from_addr: string; from_name: string; subject: string; attachments: string }[];
   }
 
   /** INBOX rows needed to re-home mail when a new rule is added. */
-  inboxForRules(): { id: number; from_addr: string; category: string; source: string; subject: string }[] {
+  inboxForRules(): { id: number; from_addr: string; from_name: string; category: string; source: string; subject: string }[] {
     return this.db.query(
-      "SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(category,'') AS category, COALESCE(source,'') AS source, COALESCE(subject,'') AS subject FROM messages WHERE mailbox='INBOX'",
+      "SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(from_name,'') AS from_name, COALESCE(category,'') AS category, COALESCE(source,'') AS source, COALESCE(subject,'') AS subject FROM messages WHERE mailbox='INBOX'",
     ).all() as any;
   }
 

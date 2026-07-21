@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Store, FOLDER_CLASSES, type Filter, type MessageRow } from "./db.ts";
-import { loadConfig, categoryHasRules, type Config } from "./config.ts";
+import { loadConfig, type Config } from "./config.ts";
 import { backend } from "./backend.ts";
 import { warmConnections } from "./mail.ts";
 import { fit, oneLine } from "./text.ts";
@@ -61,23 +61,26 @@ function buildSidebar(store: Store, cfg: Config): SideEntry[] {
       entries.push({ kind: "account", name: a, label: `${a} (${accCounts.get(a)})`, exclude: ex });
   }
 
-  const manual = cfg.categories.filter((c) => categoryHasRules(c) && (catCounts.get(c.name) ?? 0) > 0);
+  // Every category defined in config.yaml is "Manual" (user-curated), whether or
+  // not it has an auto-match rule — Personal (no rule, manually filed) included.
+  const configNames = new Set(cfg.categories.map((c) => c.name));
+  const manual = cfg.categories.filter((c) => (catCounts.get(c.name) ?? 0) > 0);
   if (manual.length > 0) {
     entries.push({ kind: "header", label: "Manual" });
     for (const c of manual)
       entries.push({ kind: "category", name: c.name, label: `${c.name} (${catCounts.get(c.name)})` });
   }
 
-  const aiNames = new Set<string>();
-  for (const c of cfg.categories) if (!categoryHasRules(c) && (catCounts.get(c.name) ?? 0) > 0) aiNames.add(c.name);
+  // "Other" holds only non-config buckets: approved-but-unlisted, AI Suggested,
+  // and Uncategorized.
+  const other: string[] = [];
   for (const c of store.approvedCategories())
-    if ((catCounts.get(c) ?? 0) > 0 && !manual.some((m) => m.name === c)) aiNames.add(c);
-  const ai = [...aiNames];
-  if ((catCounts.get("Suggested") ?? 0) > 0) ai.push("Suggested");
-  if ((catCounts.get("Uncategorized") ?? 0) > 0) ai.push("Uncategorized");
-  if (ai.length > 0) {
+    if ((catCounts.get(c) ?? 0) > 0 && !configNames.has(c)) other.push(c);
+  if ((catCounts.get("Suggested") ?? 0) > 0) other.push("Suggested");
+  if ((catCounts.get("Uncategorized") ?? 0) > 0) other.push("Uncategorized");
+  if (other.length > 0) {
     entries.push({ kind: "header", label: "Other" });
-    for (const name of ai)
+    for (const name of other)
       entries.push({ kind: "category", name, label: `${name} (${catCounts.get(name)})` });
   }
 
@@ -86,7 +89,7 @@ function buildSidebar(store: Store, cfg: Config): SideEntry[] {
   if (folderRows.length > 0) {
     entries.push({ kind: "header", label: "Folders" });
     for (const c of folderRows)
-      entries.push({ kind: "folder", cls: c, label: `${c} (${folderCounts.get(c)})` });
+      entries.push({ kind: "folder", cls: c, label: `${c === "Archive" ? "Archived" : c} (${folderCounts.get(c)})` });
   }
 
   const snoozed = store.snoozedCount();
@@ -289,9 +292,13 @@ export function App({
       else if (input === "h" || key.leftArrow) scrollList(-1, true); // previous email
       else if (input === "v") openInBrowser();
       else if (input === "e") {
+        const ids = targets();
+        store.setDone(ids, true);
+        setSelected(new Set());
         setMode("list");
         setScroll(0);
-        void doBackend("Archiving on server", () => be.archive(targets()));
+        setVersion((v) => v + 1);
+        setStatus(`done ${ids.length}`);
       } else if (input === "s") {
         setPicker({ kind: "snooze", options: SNOOZE_OPTIONS.map(([l]) => l), idx: 0 });
       } else if (input === "d") {
@@ -339,7 +346,11 @@ export function App({
     else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
     else if (input === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
     else if (input === "e" && targets().length > 0) {
-      void doBackend("Archiving on server", () => be.archive(targets()));
+      const ids = targets();
+      store.setDone(ids, true);
+      setSelected(new Set());
+      setVersion((v) => v + 1); // cursor index stays → now points at the next email
+      setStatus(`done ${ids.length}`);
     } else if (input === "s" && targets().length > 0) {
       setPicker({ kind: "snooze", options: SNOOZE_OPTIONS.map(([l]) => l), idx: 0 });
     } else if (input === "d" && targets().length > 0) {
@@ -353,9 +364,10 @@ export function App({
   });
 
   // ----- render -----
+  const nowYear = new Date().getFullYear();
   const senderW = 18;
   const catW = listW < 72 ? 0 : 13;
-  const dateW = 12; // "Jul 20 15:04"
+  const dateW = 17; // "Jul 20 2024 15:04" (year shown only for non-current-year)
   const subjW = Math.max(0, listW - (2 + 1 + senderW + 1 + (catW > 0 ? catW + 1 : 0) + dateW + 1));
 
   const winStart = msgs.length > bodyH ? Math.max(0, Math.min(safeMsgIdx - Math.floor(bodyH / 2), msgs.length - bodyH)) : 0;
@@ -483,10 +495,11 @@ export function App({
               const cat = catW > 0 ? fit(m.category || "—", catW) : "";
               const subj = fit(oneLine(m.subject) || "(no subject)", subjW);
               const d = new Date(m.date * 1000);
+              // Current year: "Jul 20 15:04". Older: "Jul 20 2024 15:04" (year + time).
+              const dm = d.toLocaleDateString("en-US", { month: "short", day: "2-digit" });
+              const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
               const date = fit(
-                d.toLocaleDateString("en-US", { month: "short", day: "2-digit" }) +
-                  " " +
-                  d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
+                d.getFullYear() === nowYear ? `${dm} ${time}` : `${dm} ${d.getFullYear()} ${time}`,
                 dateW,
               );
               if (cursor)

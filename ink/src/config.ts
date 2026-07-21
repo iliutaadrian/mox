@@ -78,16 +78,18 @@ export function domainOf(addr: string): string {
  * order IS the precedence: put muted/blocking categories first, then
  * keyword categories, then broad domain categories.
  */
-export function matchCategory(cfg: Config, fromAddr: string, subject = ""): string {
+export function matchCategory(cfg: Config, fromAddr: string, subject = "", fromName = ""): string {
   const addr = fromAddr.toLowerCase().trim();
   const domain = domainOf(addr);
-  const subj = subject.toLowerCase();
+  // Words match the subject OR the sender display name — some senders (e.g. via
+  // Apple's private relay) share a domain and are only identifiable by name.
+  const hay = `${subject} ${fromName}`.toLowerCase();
   for (const c of cfg.categories) {
     const m = c.match;
     if (!m) continue;
     if (addr && m.addresses?.some((a) => addr === a.toLowerCase())) return c.name;
     if (domain && m.domains?.some((d) => { const dl = d.toLowerCase(); return domain === dl || domain.endsWith("." + dl); })) return c.name;
-    if (subj && m.words?.some((w) => subj.includes(w.toLowerCase()))) return c.name;
+    if (hay.trim() && m.words?.some((w) => hay.includes(w.toLowerCase()))) return c.name;
   }
   return "";
 }

@@ -14,7 +14,7 @@ export function classifyByRules(store: Store, cfg: Config): number {
     const batch = store.unclassified(500);
     if (batch.length === 0) break;
     for (const m of batch) {
-      const name = matchCategory(cfg, m.from_addr, m.subject);
+      const name = matchCategory(cfg, m.from_addr, m.subject, m.from_name);
       if (name) {
         store.setClassification(m.id, name, SOURCE_RULE);
         filed++;
@@ -31,7 +31,7 @@ export function classifyByRules(store: Store, cfg: Config): number {
 export function applyRules(store: Store, cfg: Config): number {
   let changed = 0;
   for (const m of store.inboxForRules()) {
-    const name = matchCategory(cfg, m.from_addr, m.subject);
+    const name = matchCategory(cfg, m.from_addr, m.subject, m.from_name);
     if (!name) continue;
     if (m.category === name && m.source === SOURCE_RULE) continue;
     store.setClassification(m.id, name, SOURCE_RULE);
