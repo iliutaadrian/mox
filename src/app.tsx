@@ -162,6 +162,35 @@ export function App({
   const [typing, setTyping] = useState(false); // search input active
   const [draft, setDraft] = useState("");
 
+  // Auto-refresh the INBOX every 10s. Quiet: skips while a manual action is
+  // running or a modal/search is open, never overlaps itself, and only bumps
+  // the view (re-render) when the fetch actually changed something.
+  const beRef = useRef(be);
+  beRef.current = be;
+  const skipAutoRef = useRef(false);
+  skipAutoRef.current = busy || typing || picker !== null;
+  useEffect(() => {
+    let inFlight = false;
+    const id = setInterval(async () => {
+      if (inFlight || skipAutoRef.current) return;
+      inFlight = true;
+      try {
+        const r = await beRef.current.sync();
+        // out looks like "fetched N, filed M by rules" — only redraw on change.
+        const nums = r.out.match(/\d+/g)?.map(Number) ?? [];
+        if (r.ok && nums.some((n) => n > 0)) {
+          setVersion((v) => v + 1);
+          setStatus(r.out);
+        }
+      } catch {
+        /* transient IMAP error — next tick retries */
+      } finally {
+        inFlight = false;
+      }
+    }, 10_000);
+    return () => clearInterval(id);
+  }, []);
+
   const entries = useMemo(() => buildSidebar(store, cfg), [store, cfg, version]);
   const safeCatIdx = Math.min(catIdx, entries.length - 1);
   const entry = entries[safeCatIdx]!.kind === "header" ? entries[0]! : entries[safeCatIdx]!;
