@@ -161,6 +161,7 @@ export function App({
   const [search, setSearch] = useState<string | null>(null); // committed query
   const [typing, setTyping] = useState(false); // search input active
   const [draft, setDraft] = useState("");
+  const [lastSync, setLastSync] = useState<number>(0); // epoch ms of last successful sync
 
   // Auto-refresh the INBOX every 10s. Quiet: skips while a manual action is
   // running or a modal/search is open, never overlaps itself, and only bumps
@@ -176,6 +177,7 @@ export function App({
       inFlight = true;
       try {
         const r = await beRef.current.sync();
+        if (r.ok) setLastSync(Date.now());
         // out looks like "fetched N, filed M by rules" — only redraw on change.
         const nums = r.out.match(/\d+/g)?.map(Number) ?? [];
         if (r.ok && nums.some((n) => n > 0)) {
@@ -422,7 +424,12 @@ export function App({
       setSelected(next);
       moveTo(safeMsgIdx + 1);
     } else if (key.escape) setSelected(new Set());
-    else if (input === "r") void doBackend("Fetching new mail", () => be.sync());
+    else if (input === "r")
+      void doBackend("Fetching new mail", async () => {
+        const r = await be.sync();
+        if (r.ok) setLastSync(Date.now());
+        return r;
+      });
     else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
     else if (input === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
     else if (input === "e" && targets().length > 0) {
@@ -529,13 +536,18 @@ export function App({
       ? `  search: "${search}" (${msgs.length}) · esc clear`
       : "  " + status;
 
+  const synced = lastSync
+    ? "synced " + new Date(lastSync).toLocaleTimeString("en-GB", { hour12: false })
+    : "not synced yet";
+
   return (
     <Box flexDirection="column" width={size.cols} height={size.rows}>
       <Box>
         <Text color={PINK} bold>
           spark-ink
         </Text>
-        <Text color={typing ? BLUE : DIM}>{fit(headerNote, size.cols - 9)}</Text>
+        <Text color={typing ? BLUE : DIM}>{fit(headerNote, Math.max(0, size.cols - 9 - synced.length - 1))}</Text>
+        <Text color={DIM}>{synced}</Text>
       </Box>
 
       <Box>
