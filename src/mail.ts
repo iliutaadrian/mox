@@ -23,14 +23,26 @@ const FETCH_CHUNK = 200;
 export type Folder = { class: string; name: string };
 
 function connect(acc: Account): ImapFlow {
-  return new ImapFlow({
+  const c = new ImapFlow({
     host: acc.imapHost,
     port: acc.imapPort,
     secure: true,
     auth: { user: acc.imapUser, pass: acc.imapPass },
     clientInfo: { name: "spark-cli", version: "1.0" },
     logger: false,
+    // Keep idle pooled connections alive; if the server still drops one, the
+    // 'error'/'close' handlers below evict it and the next use reconnects.
+    socketTimeout: 15 * 60 * 1000,
   });
+  // imapflow is an EventEmitter: an unhandled 'error' (e.g. "Socket timeout" on
+  // an idle pooled connection) would crash the process. Swallow it and evict
+  // the dead client from the pool so getClient() reconnects on next use.
+  const evict = () => {
+    for (const [name, client] of pool) if (client === c) pool.delete(name);
+  };
+  c.on("error", evict);
+  c.on("close", evict);
+  return c;
 }
 
 // Connection pool: logging in to IMAP (TLS + AUTH + ID) is the dominant cost of

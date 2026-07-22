@@ -10,6 +10,13 @@ import { fileURLToPath } from "node:url";
 
 import { App } from "./app.tsx";
 
+// Safety net: a background IMAP socket error (idle connection dropped by the
+// server) must never crash the TUI. Handlers on each client already evict dead
+// connections; this catches anything that slips through so the app keeps
+// running and the next refresh reconnects.
+process.on("uncaughtException", () => {});
+process.on("unhandledRejection", () => {});
+
 // Locate config.yaml: $SPARK_CONFIG, then the repo root (dev), then the standard
 // per-user location. The SQLite store lives next to it ($SPARK_DB overrides).
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
