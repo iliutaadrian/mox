@@ -235,31 +235,50 @@ export function backend(store: Store, cfg: Config) {
       }
     },
 
-    // Download all of a message's attachments into ~/Downloads (name-collisions
-    // get " (2)", " (3)" … suffixes). Returns how many were saved + the dir.
+    // Download a message's attachments to ~/Downloads. One file → straight into
+    // Downloads; multiple → a subfolder named after the email so they stay
+    // grouped. Name collisions get " (2)", " (3)" … suffixes.
     async download(id: number): Promise<Result> {
       try {
         const row = store.byIds([id])[0];
+        const full = store.full(id);
         const acc = row && accByName(cfg).get(row.account);
         if (!row || !acc) return { ok: false, out: "message not found" };
         const name = await folderName(new Map(), acc, row.mailbox);
         const atts = await fetchAllAttachments(acc, name, row.uid);
         if (atts.length === 0) return { ok: true, out: "no attachments" };
-        const dir = join(homedir(), "Downloads");
-        mkdirSync(dir, { recursive: true });
-        for (const a of atts) {
-          const safe = a.filename.replace(/[/\\]/g, "-");
-          let dest = join(dir, safe);
+
+        const uniquePath = (base: string, fname: string) => {
+          const safe = fname.replace(/[/\\]/g, "-");
+          let dest = join(base, safe);
           if (existsSync(dest)) {
             const dot = safe.lastIndexOf(".");
-            const base = dot > 0 ? safe.slice(0, dot) : safe;
+            const stem = dot > 0 ? safe.slice(0, dot) : safe;
             const ext = dot > 0 ? safe.slice(dot) : "";
             let i = 2;
-            while (existsSync((dest = join(dir, `${base} (${i})${ext}`)))) i++;
+            while (existsSync((dest = join(base, `${stem} (${i})${ext}`)))) i++;
           }
-          writeFileSync(dest, a.data);
+          return dest;
+        };
+
+        const downloads = join(homedir(), "Downloads");
+        let outDir = downloads;
+        if (atts.length > 1) {
+          // Folder name from the subject (fallback sender), sanitized + trimmed.
+          const label = (full?.subject?.trim() || full?.from_name || row.account || "email")
+            .replace(/[/\\:*?"<>|]/g, "-")
+            .replace(/\s+/g, " ")
+            .slice(0, 80)
+            .trim();
+          outDir = uniquePath(downloads, label); // reuse collision logic for the dir too
+          mkdirSync(outDir, { recursive: true });
+        } else {
+          mkdirSync(downloads, { recursive: true });
         }
-        return { ok: true, out: `saved ${atts.length} to ~/Downloads` };
+
+        for (const a of atts) writeFileSync(uniquePath(outDir, a.filename), a.data);
+        const where = atts.length > 1 ? `~/Downloads/${outDir.slice(downloads.length + 1)}/` : "~/Downloads";
+        return { ok: true, out: `saved ${atts.length} to ${where}` };
       } catch (e) {
         return { ok: false, out: String(e) };
       }
