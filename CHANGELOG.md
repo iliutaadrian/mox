@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-23
+
 ### Added
 - `mox --version` / `-v` — print the installed version.
 - `mox upgrade` — download and install the latest release in place (re-runs the
@@ -49,6 +51,7 @@ First public release.
 - Prebuilt macOS binary (Apple Silicon) and a `curl | bash` installer;
   single-folder data directory at `~/Documents/mox`.
 
-[Unreleased]: https://github.com/iliutaadrian/mox/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/iliutaadrian/mox/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/iliutaadrian/mox/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/iliutaadrian/mox/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/iliutaadrian/mox/releases/tag/v1.0.0
