@@ -307,6 +307,40 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     ).all(...params, limit) as any;
   }
 
+  /** Stats for `mox --stats`, scoped to DOWNLOADED mail (a cached body or html —
+   * what you can actually read offline), not metadata-only rows. Returns the
+   * download totals plus breakdowns by category, account+mailbox and sender. */
+  downloadStats(senderLimit = 15): {
+    total: number;
+    downloaded: number;
+    withHtml: number;
+    byCategory: { key: string; n: number }[];
+    byMailbox: { key: string; n: number }[];
+    bySender: { key: string; n: number }[];
+  } {
+    // A single reusable predicate: the row carries readable content.
+    const DL = "(COALESCE(body,'')!='' OR COALESCE(html,'')!='')";
+    const g = this.db.query(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN ${DL} THEN 1 ELSE 0 END) AS downloaded,
+              SUM(CASE WHEN COALESCE(html,'')!='' THEN 1 ELSE 0 END) AS withHtml
+       FROM messages`,
+    ).get() as { total: number; downloaded: number; withHtml: number };
+    const byCategory = this.db.query(
+      `SELECT COALESCE(NULLIF(category,''),'Uncategorized') AS key, COUNT(*) AS n
+       FROM messages WHERE ${DL} GROUP BY key ORDER BY n DESC`,
+    ).all() as { key: string; n: number }[];
+    const byMailbox = this.db.query(
+      `SELECT account || ' / ' || mailbox AS key, COUNT(*) AS n
+       FROM messages WHERE ${DL} GROUP BY key ORDER BY n DESC`,
+    ).all() as { key: string; n: number }[];
+    const bySender = this.db.query(
+      `SELECT COALESCE(NULLIF(from_name,''), from_addr) AS key, COUNT(*) AS n
+       FROM messages WHERE ${DL} GROUP BY lower(from_addr) ORDER BY n DESC LIMIT ?`,
+    ).all(senderLimit) as { key: string; n: number }[];
+    return { total: g.total, downloaded: g.downloaded, withHtml: g.withHtml, byCategory, byMailbox, bySender };
+  }
+
   folderCounts(): Map<string, number> {
     const rows = this.db.query(
       `SELECT mailbox, COUNT(*) AS n FROM messages WHERE mailbox IN ('Sent','Spam','Archive','Trash') GROUP BY mailbox`,
@@ -387,6 +421,15 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     return this.db.query(
       "SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(from_name,'') AS from_name, COALESCE(subject,'') AS subject, COALESCE(attachments,'') AS attachments FROM messages WHERE category IS NULL AND mailbox='INBOX' ORDER BY date DESC LIMIT ?",
     ).all(limit) as { id: number; from_addr: string; from_name: string; subject: string; attachments: string }[];
+  }
+
+  /** Every INBOX message eligible for rule re-filing: all but manually-moved
+   * mail (source='manual' is a user override rules must not clobber). Carries
+   * the current category so `mox --reclassify` can skip unchanged rows. */
+  reclassifiable(): { id: number; from_addr: string; from_name: string; subject: string; category: string | null; source: string | null }[] {
+    return this.db.query(
+      "SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(from_name,'') AS from_name, COALESCE(subject,'') AS subject, category, source FROM messages WHERE mailbox='INBOX' AND (source IS NULL OR source != 'manual')",
+    ).all() as { id: number; from_addr: string; from_name: string; subject: string; category: string | null; source: string | null }[];
   }
 
   setClassification(id: number, category: string, source: string) {

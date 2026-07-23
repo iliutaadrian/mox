@@ -94,6 +94,33 @@ export function classifyByRules(store: Store, cfg: Config): number {
   return filed;
 }
 
+/** reclassifyAll re-applies the current config rules to EVERY INBOX message
+ * except manually-moved mail — the retroactive counterpart to classifyByRules,
+ * run via `mox --reclassify` after editing categories in config.yaml. Adding a
+ * domain/word files matching mail; removing one drops the now-unmatched mail
+ * back to Uncategorized. Only rows whose category actually changes are written.
+ * Returns the moves. */
+export function reclassifyAll(store: Store, cfg: Config): { filed: number; unfiled: number; scanned: number } {
+  const rows = store.reclassifiable();
+  let filed = 0;
+  let unfiled = 0;
+  for (const m of rows) {
+    const name = matchCategory(cfg, m.from_addr, m.subject, m.from_name);
+    const nextCat = name || UNCATEGORIZED;
+    const nextSrc = name ? SOURCE_RULE : "";
+    // Treat NULL / '' / 'Uncategorized' as the same "unclassified" state so a
+    // no-op doesn't churn classified_at.
+    const wasUncat = !m.category || m.category === UNCATEGORIZED;
+    const isUncat = nextCat === UNCATEGORIZED;
+    if (wasUncat && isUncat) continue;
+    if (m.category === nextCat && (m.source ?? "") === nextSrc) continue;
+    store.setClassification(m.id, nextCat, nextSrc);
+    if (name) filed++;
+    else unfiled++;
+  }
+  return { filed, unfiled, scanned: rows.length };
+}
+
 /** refresh fetches new mail across all folders, then files the newly-arrived
  * INBOX mail by rules (classifyByRules touches only unclassified rows, so
  * existing categories are preserved). Editing config rules and re-filing

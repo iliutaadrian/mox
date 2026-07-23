@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process";
 import { App } from "./app.tsx";
 import { Store } from "./db.ts";
 import { loadConfig } from "./config.ts";
-import { prefill } from "./engine.ts";
+import { prefill, reclassifyAll } from "./engine.ts";
 import { DATA_DIR, resolveCfgPath, resolveDbPath } from "./paths.ts";
 import pkg from "../package.json";
 
@@ -20,6 +20,26 @@ const args = process.argv.slice(2);
 // `mox --version` / `-v`: print the build version and exit. No config needed.
 if (args.includes("--version") || args.includes("-v")) {
   console.log(`mox ${pkg.version}`);
+  process.exit(0);
+}
+
+// `mox --help` / `-h`: print usage and exit. Must be handled before anything
+// else — otherwise an unrecognized flag falls through and boots the TUI.
+if (args.includes("--help") || args.includes("-h")) {
+  console.log(`mox ${pkg.version} — a fast, local, rule-based terminal email client
+
+usage:
+  mox                    launch the TUI (default)
+  mox --reclassify       file the inbox against the current config rules
+                         (manual moves kept), then exit
+  mox --prefill          one-time seed: metadata for the whole inbox + full
+                         bodies for offline_categories, then exit
+  mox --stats            print a snapshot of the local store, then exit
+  mox upgrade            download + install the latest release in place
+  mox --version, -v      print the version and exit
+  mox --help, -h         print this help and exit
+
+config + database live in ~/Documents/mox (override with $MOX_CONFIG / $MOX_DB).`);
   process.exit(0);
 }
 
@@ -65,6 +85,58 @@ if (!existsSync(cfgPath)) {
   process.exit(1);
 }
 // dbPath is created on first run if absent.
+
+// `mox --reclassify`: re-apply the current config rules to every INBOX message
+// (manual moves preserved), without fetching. Use after editing categories in
+// config.yaml — adding a domain/word files matching mail; removing one drops the
+// now-unmatched mail back to Uncategorized. No network, no config beyond load.
+if (args.includes("--reclassify")) {
+  const store = new Store(dbPath);
+  const cfg = loadConfig(cfgPath);
+  const { filed, unfiled, scanned } = reclassifyAll(store, cfg);
+  store.close();
+  console.log(`reclassified ${scanned} inbox messages: ${filed} filed, ${unfiled} back to Uncategorized`);
+  process.exit(0);
+}
+
+// `mox --stats`: print a read-only snapshot of DOWNLOADED mail (rows with a
+// cached body/html — what's readable offline), broken down by category,
+// account/mailbox and top senders, then exit. No network.
+if (args.includes("--stats")) {
+  const store = new Store(dbPath);
+  const C = { dim: "\x1b[2m", green: "\x1b[32m", cyan: "\x1b[36m", bold: "\x1b[1m", off: "\x1b[0m" };
+  const tty = process.stdout.isTTY;
+  const paint = (s: string, c: string) => (tty ? `${c}${s}${C.off}` : s);
+  const num = (n: number) => n.toLocaleString("en-US");
+  const w = (s: string) => process.stdout.write(s);
+
+  const s = store.downloadStats();
+  store.close();
+
+  // Right-align counts in a column as wide as the largest download count.
+  const maxN = Math.max(s.downloaded, 1);
+  const pad = (n: number) => num(n).padStart(num(maxN).length);
+  const row = (label: string, n: number, extra = "") =>
+    w(`      ${paint(pad(n), C.bold)}  ${label}${extra ? paint(`  ${extra}`, C.dim) : ""}\n`);
+  const section = (title: string, rows: { key: string; n: number }[]) => {
+    w(`\n  ${paint(title, C.cyan)}\n`);
+    if (!rows.length) w(`      ${paint("none", C.dim)}\n`);
+    for (const r of rows) row(r.key, r.n);
+  };
+
+  const pct = s.total ? ((s.downloaded / s.total) * 100).toFixed(1) : "0.0";
+  const htmlPct = s.downloaded ? ((s.withHtml / s.downloaded) * 100).toFixed(0) : "0";
+  w(`\n  ${paint("mox", C.bold)} ${paint("· stats · downloaded mail", C.dim)}\n\n`);
+  w(`  ${paint("overview", C.cyan)}\n`);
+  row("downloaded", s.downloaded, `${pct}% of ${num(s.total)} total`);
+  row("with html", s.withHtml, `${htmlPct}% of downloaded`);
+
+  section("downloaded by category", s.byCategory);
+  section("downloaded by mailbox", s.byMailbox);
+  section(`top ${s.bySender.length} senders`, s.bySender);
+  w("\n");
+  process.exit(0);
+}
 
 // `mox --prefill`: one-time headless bulk seed — sweep envelope-only metadata
 // over the whole INBOX (searchable offline) and cache full bodies for the
