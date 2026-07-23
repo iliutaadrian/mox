@@ -746,7 +746,14 @@ export function App(props: { dbPath: string; cfgPath: string }) {
               </Show>
             }
           >
-            <Reading opened={opened()!} body={readingBody()} scroll={scroll()} w={listW()} h={bodyH()} />
+            <Reading
+              opened={opened()!}
+              toAddr={cfg.accounts.find((a) => a.name === opened()!.account)?.imapUser ?? ""}
+              body={readingBody()}
+              scroll={scroll()}
+              w={listW()}
+              h={bodyH()}
+            />
           </Show>
         </box>
       </box>
@@ -810,6 +817,7 @@ function Seg(props: { fg?: string; text: string }) {
 
 function Reading(props: {
   opened: NonNullable<ReturnType<Store["full"]>>;
+  toAddr: string;
   body: string;
   scroll: number;
   w: number;
@@ -821,6 +829,7 @@ function Reading(props: {
     const head = [
       `Mailbox: ${o.account}`,
       `From:    ${o.from_name} <${o.from_addr}>`,
+      ...(props.toAddr ? [`To:      ${props.toAddr}`] : []),
       `Subject: ${oneLine(o.subject)}`,
       `Date:    ${new Date(o.date * 1000).toLocaleString("en-GB")}`,
       `Category: ${o.category || "Uncategorized"}${o.source ? `  [${o.source}]` : ""}`,
