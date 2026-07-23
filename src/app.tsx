@@ -357,7 +357,9 @@ export function App({
       } else if (input === "l" || key.rightArrow) scrollList(1, true); // next email
       else if (input === "h" || key.leftArrow) scrollList(-1, true); // previous email
       else if (input === "v") openInBrowser();
-      else if (input === "e") {
+      else if (input === "D") {
+        if (current) void doBackend("Downloading attachments", () => be.download(current.id));
+      } else if (input === "e") {
         const ids = targets();
         store.setDone(ids, true);
         setSelected(new Set());
@@ -432,6 +434,7 @@ export function App({
       });
     else if (input === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
     else if (input === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
+    else if (input === "D" && current) void doBackend("Downloading attachments", () => be.download(current.id));
     else if (input === "e" && targets().length > 0) {
       const ids = targets();
       store.setDone(ids, true);
@@ -525,9 +528,10 @@ export function App({
   const restorable =
     (activeFilter.kind === "folder" && (activeFilter.class === "Trash" || activeFilter.class === "Archive")) ||
     !!current?.done;
+  const hasAtts = !!opened?.attachments && opened.attachments !== "" && opened.attachments !== "[]";
   const hint =
     mode === "reading"
-      ? `j/k scroll · h/l prev/next · v html${restorable ? " · u restore" : " · e done · a archive · d trash"} · M/U read · esc/q back`
+      ? `j/k scroll · h/l prev/next · v html${hasAtts ? " · D save" : ""}${restorable ? " · u restore" : " · e done · a archive · d trash"} · M/U read · esc/q back`
       : `enter open${restorable ? " · u restore" : " · e done · a archive · d trash"} · m move · / search · r refresh · M/U read · q quit${selected.size > 0 ? ` · ${selected.size} selected` : ""}`;
 
   const headerNote = typing

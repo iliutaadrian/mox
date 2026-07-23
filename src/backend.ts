@@ -1,9 +1,13 @@
 // Actions the TUI triggers, run IN-PROCESS (no subprocess). Each returns
 // {ok, out} for the status line. Writes to the server happen only in mark().
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
 import { type Account, type Config } from "./config.ts";
 import { refresh } from "./engine.ts";
-import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders, fetchBody } from "./mail.ts";
+import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders, fetchBody, fetchAllAttachments } from "./mail.ts";
 
 export type Result = { ok: boolean; out: string };
 
@@ -228,6 +232,36 @@ export function backend(store: Store, cfg: Config) {
         return { ok: true, body: text, html };
       } catch {
         return { ok: false, body: "", html: "" };
+      }
+    },
+
+    // Download all of a message's attachments into ~/Downloads (name-collisions
+    // get " (2)", " (3)" … suffixes). Returns how many were saved + the dir.
+    async download(id: number): Promise<Result> {
+      try {
+        const row = store.byIds([id])[0];
+        const acc = row && accByName(cfg).get(row.account);
+        if (!row || !acc) return { ok: false, out: "message not found" };
+        const name = await folderName(new Map(), acc, row.mailbox);
+        const atts = await fetchAllAttachments(acc, name, row.uid);
+        if (atts.length === 0) return { ok: true, out: "no attachments" };
+        const dir = join(homedir(), "Downloads");
+        mkdirSync(dir, { recursive: true });
+        for (const a of atts) {
+          const safe = a.filename.replace(/[/\\]/g, "-");
+          let dest = join(dir, safe);
+          if (existsSync(dest)) {
+            const dot = safe.lastIndexOf(".");
+            const base = dot > 0 ? safe.slice(0, dot) : safe;
+            const ext = dot > 0 ? safe.slice(dot) : "";
+            let i = 2;
+            while (existsSync((dest = join(dir, `${base} (${i})${ext}`)))) i++;
+          }
+          writeFileSync(dest, a.data);
+        }
+        return { ok: true, out: `saved ${atts.length} to ~/Downloads` };
+      } catch (e) {
+        return { ok: false, out: String(e) };
       }
     },
   };

@@ -432,6 +432,28 @@ export async function fetchBody(acc: Account, imapName: string, uid: number): Pr
 }
 
 /** fetchAttachment re-fetches one message's named attachment on demand. */
+/** fetchAllAttachments downloads a message once and returns every attachment
+ * (real files only; inline images with no filename are skipped). */
+export async function fetchAllAttachments(
+  acc: Account,
+  imapName: string,
+  uid: number,
+): Promise<{ filename: string; data: Buffer }[]> {
+  const client = connect(acc);
+  await client.connect();
+  try {
+    await client.mailboxOpen(imapName, { readOnly: true });
+    const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
+    if (!msg || !msg.source) throw new Error(`uid ${uid} not found`);
+    const p = await simpleParser(msg.source);
+    return (p.attachments ?? [])
+      .filter((a) => a.filename)
+      .map((a) => ({ filename: a.filename as string, data: a.content as Buffer }));
+  } finally {
+    await client.logout();
+  }
+}
+
 export async function fetchAttachment(
   acc: Account,
   imapName: string,
