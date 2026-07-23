@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-23
+
+### Added
+- Attachment metadata captured from IMAP `BODYSTRUCTURE` on every sync (no bytes
+  downloaded); the message list marks mail carrying files with a 📎.
+- `mox --reclassify` — re-file the whole inbox against the current config rules
+  (manual moves preserved), no network.
+- `mox --stats` — snapshot of downloaded/offline-readable mail, broken down by
+  category, mailbox and top senders.
+- `mox --help` / `-h` — print usage.
+- `mox --prefill` now shows live per-account progress (bodies/index/new mail)
+  and reports incomplete accounts instead of silently swallowing failures.
+
+### Changed
+- Save attachments in the reading pane with `s` (was `D`).
+- Prefill is dramatically faster and more resilient: batched inserts in a single
+  transaction (`PRAGMA synchronous = NORMAL` under WAL) and a chunked whole-inbox
+  metadata sweep with per-chunk reconnect + retry, so a dropped connection
+  resumes where it stopped rather than aborting the seed.
+
+### Fixed
+- Prefill no longer marks a whole account failed after a mid-sweep reconnect:
+  `syncAll` re-acquires the pooled connection per folder instead of reusing a
+  reference the reconnect had replaced.
+
 ## [1.2.0] - 2026-07-23
 
 ### Added
@@ -51,7 +76,8 @@ First public release.
 - Prebuilt macOS binary (Apple Silicon) and a `curl | bash` installer;
   single-folder data directory at `~/Documents/mox`.
 
-[Unreleased]: https://github.com/iliutaadrian/mox/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/iliutaadrian/mox/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/iliutaadrian/mox/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/iliutaadrian/mox/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/iliutaadrian/mox/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/iliutaadrian/mox/releases/tag/v1.0.0
