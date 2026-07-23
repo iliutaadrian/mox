@@ -2,7 +2,7 @@
   "mcpServers": {
     "mox": {
       "command": "/Users/iliutaadrian/.bun/bin/bun",
-      "args": ["/Users/iliutaadrian/Sites/spark-cli/src/mcp.ts"]
+      "args": ["/Users/iliutaadrian/Sites/mox/src/mcp.ts"]
     }
   }
 }
