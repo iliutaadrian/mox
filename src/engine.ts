@@ -1,9 +1,11 @@
 // Engine: fetch + deterministic rule-filing. No AI — the first matching config
 // rule sets a message's category; anything unmatched in the INBOX becomes
-// Uncategorized.
+// Uncategorized. New mail is filed automatically on fetch/`r` (classifyByRules,
+// unclassified rows only); re-filing existing mail after a rule change is a
+// manual step via `mox --reclassify` (reclassifyAll).
 import { Store, UNCATEGORIZED, SOURCE_RULE } from "./db.ts";
 import { matchCategory, type Config, type Account } from "./config.ts";
-import { syncAll, fetchBodies } from "./mail.ts";
+import { syncAll, fetchBodies, type SyncProgress } from "./mail.ts";
 
 /** backfillOffline downloads + caches the full body/html for every message in
  * the configured offline categories that isn't cached yet (offline reading).
@@ -47,10 +49,10 @@ export async function backfillOffline(
       const byUid = new Map(rows.map((r) => [r.uid, r.id]));
       try {
         const bodies = await fetchBodies(acc, acc.mailbox, rows.map((r) => r.uid));
-        for (const [uid, { text, html }] of bodies) {
+        for (const [uid, { text, html, atts }] of bodies) {
           const id = byUid.get(uid);
           if (id !== undefined && (text || html)) {
-            store.setContent(id, text, html);
+            store.setContent(id, text, html, atts);
             cached++;
             cachedThisPass++;
           }
@@ -67,50 +69,69 @@ export async function backfillOffline(
   return cached;
 }
 
-/** classifyByRules files every unclassified INBOX message: the first matching
- * category (by sender address/domain or subject keyword, in config order) wins;
- * anything unmatched becomes Uncategorized. Returns how many a rule claimed. */
+/** classifyByRules files every UNCLASSIFIED INBOX message (category IS NULL) —
+ * i.e. fresh arrivals from a fetch/`r`: the first matching config category (by
+ * sender address/domain or subject keyword, in config order) wins; anything
+ * unmatched becomes Uncategorized. Already-categorized mail is left untouched,
+ * so it never clobbers an existing category — use reclassifyAll for that.
+ * Returns how many a rule claimed. */
 export function classifyByRules(store: Store, cfg: Config): number {
   let filed = 0;
   for (;;) {
     const batch = store.unclassified(500);
     if (batch.length === 0) break;
-    for (const m of batch) {
+    // Compute the filing for the whole batch, then commit it in one transaction.
+    const updates = batch.map((m) => {
       const name = matchCategory(cfg, m.from_addr, m.subject, m.from_name);
       if (name) {
-        store.setClassification(m.id, name, SOURCE_RULE);
         filed++;
-      } else {
-        store.setClassification(m.id, UNCATEGORIZED, "");
+        return { id: m.id, category: name, source: SOURCE_RULE };
       }
-    }
+      return { id: m.id, category: UNCATEGORIZED, source: "" };
+    });
+    store.setClassificationMany(updates);
   }
   return filed;
 }
 
-/** refresh fetches new mail across all folders, then files the INBOX by rules.
- * With prefill, the INBOX cold backfill additionally sweeps envelope-only
- * metadata over the whole mailbox (see syncOne). */
+/** refresh fetches new mail across all folders, then files the newly-arrived
+ * INBOX mail by rules (classifyByRules touches only unclassified rows, so
+ * existing categories are preserved). Editing config rules and re-filing
+ * existing mail is a separate manual step (`mox --reclassify`). With prefill,
+ * the INBOX cold backfill additionally sweeps envelope-only metadata over the
+ * whole mailbox (see syncOne). */
 export async function refresh(
   store: Store,
   cfg: Config,
   inboxOnly = false,
   prefill = false,
-): Promise<{ fetched: number; filed: number }> {
+  onProgress?: SyncProgress,
+): Promise<{ fetched: number; filed: number; failed: string[] }> {
   // Accounts sync concurrently (independent connections), so total time is the
-  // slowest account, not the sum. inboxOnly keeps the interactive `r` fast.
-  const counts = await Promise.all(
+  // slowest account, not the sum. inboxOnly keeps the interactive `r` fast. A
+  // failing account is recorded (not silently swallowed) so callers never report
+  // a partial prefill as complete.
+  const results = await Promise.all(
     cfg.accounts.map((acc) =>
-      syncAll(store, acc, cfg.fetchLimit, cfg.fetchSinceDays, inboxOnly, prefill).catch(() => 0),
+      syncAll(store, acc, cfg.fetchLimit, cfg.fetchSinceDays, inboxOnly, prefill, onProgress)
+        .then((n) => {
+          onProgress?.({ account: acc.name, folder: "", phase: "done", done: n, total: n });
+          return { n, failed: false };
+        })
+        .catch(() => {
+          onProgress?.({ account: acc.name, folder: "", phase: "failed", done: 0, total: 0 });
+          return { n: 0, failed: true };
+        }),
     ),
   );
-  const fetched = counts.reduce((a, b) => a + b, 0);
+  const fetched = results.reduce((a, r) => a + r.n, 0);
+  const failed = cfg.accounts.filter((_, i) => results[i]!.failed).map((a) => a.name);
   const filed = classifyByRules(store, cfg);
   // Keep only recent bodies on disk; older mail is fetched on demand when opened.
   if (cfg.contentDays > 0) {
     store.pruneContent(Math.floor(Date.now() / 1000) - cfg.contentDays * 86400, cfg.offlineCategories);
   }
-  return { fetched, filed };
+  return { fetched, filed, failed };
 }
 
 /** prefill runs the wide one-time seed: a full sync with the INBOX metadata
@@ -121,12 +142,13 @@ export async function prefill(
   store: Store,
   cfg: Config,
   cb?: {
+    onSync?: SyncProgress;
     onSynced?: (fetched: number, filed: number) => void;
     onCache?: (done: number, total: number) => void;
   },
-): Promise<{ fetched: number; filed: number; cached: number }> {
-  const { fetched, filed } = await refresh(store, cfg, false, true);
+): Promise<{ fetched: number; filed: number; cached: number; failed: string[] }> {
+  const { fetched, filed, failed } = await refresh(store, cfg, false, true, cb?.onSync);
   cb?.onSynced?.(fetched, filed);
   const cached = await backfillOffline(store, cfg, cb?.onCache);
-  return { fetched, filed, cached };
+  return { fetched, filed, cached, failed };
 }

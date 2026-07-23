@@ -20,6 +20,16 @@ import {
 
 const FETCH_CHUNK = 200;
 
+// Metadata sweep: fetch this many messages per FETCH command. A single FETCH
+// over the whole inbox (tens of thousands) is fragile — Yahoo drops long-running
+// commands mid-stream — so the sweep is chunked and each chunk is retried on a
+// dropped connection. 500 keeps round-trips low (~60 for 30k) while bounding the
+// blast radius of a drop to one chunk.
+const SWEEP_CHUNK = 500;
+const SWEEP_RETRIES = 5;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 export type Folder = { class: string; name: string };
 
 function connect(acc: Account): ImapFlow {
@@ -66,6 +76,16 @@ async function getClient(acc: Account): Promise<ImapFlow> {
   return c;
 }
 
+// Drop an account's pooled connection so the next getClient() reconnects clean —
+// used after a dropped/aborted command mid-sweep.
+function dropClient(acc: Account) {
+  const c = pool.get(acc.name);
+  if (c) {
+    pool.delete(acc.name);
+    c.logout().catch(() => {});
+  }
+}
+
 /** Pre-open connections in the background (fire-and-forget) so the first
  * refresh doesn't pay the login cost interactively. */
 export function warmConnections(accounts: Account[]) {
@@ -104,24 +124,60 @@ async function parseRaw(raw: Buffer): Promise<{ text: string; html: string; atts
   return { text: p.text ?? "", html: typeof p.html === "string" ? p.html : "", atts };
 }
 
-async function insertFromFetch(
-  store: Store,
+// A BODYSTRUCTURE node (imapflow's parsed MessageStructureObject). Recursive.
+type StructNode = {
+  type?: string;
+  parameters?: { name?: string };
+  size?: number;
+  disposition?: string;
+  dispositionParameters?: { filename?: string };
+  childNodes?: StructNode[];
+};
+
+// Derive attachment metadata (name/type/size) from a BODYSTRUCTURE tree — no
+// message bytes are downloaded. A leaf is an attachment when it declares
+// disposition=attachment or carries a filename/name parameter. Applies the same
+// filter as parseRaw (drop nameless application/octet-stream noise) so the two
+// fetch paths agree. Returns [] for a message with no real attachments.
+function attsFromStructure(node: StructNode | undefined): Attachment[] {
+  const out: Attachment[] = [];
+  const walk = (n: StructNode | undefined) => {
+    if (!n) return;
+    if (n.childNodes?.length) {
+      for (const c of n.childNodes) walk(c);
+      return;
+    }
+    const name = n.dispositionParameters?.filename || n.parameters?.name || "";
+    const isAttachment = (n.disposition ?? "").toLowerCase() === "attachment" || name !== "";
+    const type = n.type ?? "application/octet-stream";
+    if (!isAttachment) return;
+    if (!name && type === "application/octet-stream") return;
+    out.push({ name: name || type, type, size: n.size ?? 0 });
+  };
+  walk(node);
+  return out;
+}
+
+// Parse one fetched message into a row to insert. Attachment metadata comes
+// from BODYSTRUCTURE (present in both the full and envelope-only fetch paths, no
+// bytes downloaded), so every synced row records its attachments. Body/html are
+// filled only when the raw source was fetched (the recent full-content slice).
+async function buildMessage(
   acc: Account,
   cls: string,
-  msg: { uid: number; source?: Buffer; envelope?: any; flags?: Set<string> },
-): Promise<boolean> {
+  msg: { uid: number; source?: Buffer; envelope?: any; flags?: Set<string>; bodyStructure?: StructNode },
+): Promise<NewMessage> {
   const env = msg.envelope ?? {};
   const from = env.from?.[0];
   let text = "",
-    html = "",
-    atts: Attachment[] = [];
+    html = "";
+  const atts: Attachment[] = attsFromStructure(msg.bodyStructure);
   if (msg.source) {
     const parsed = await parseRaw(msg.source);
     text = parsed.text;
     html = parsed.html;
-    atts = parsed.atts;
   }
-  const nm: NewMessage = {
+  return {
     account: acc.name,
     mailbox: cls,
     uid: msg.uid,
@@ -136,47 +192,112 @@ async function insertFromFetch(
     attachments: atts,
     seen: msg.flags?.has("\\Seen") ?? false,
   };
-  return store.insertMessage(nm);
 }
 
-const FETCH_OPTS = { uid: true, envelope: true, flags: true, source: true } as const;
-// Metadata-only: envelope + flags, no raw source. Used for the cold INBOX
-// backfill of everything past the full-content window — the whole mailbox stays
-// searchable offline while only the recent slice carries body/html.
-const FETCH_META = { uid: true, envelope: true, flags: true } as const;
+const FETCH_OPTS = { uid: true, envelope: true, flags: true, bodyStructure: true, source: true } as const;
+// Metadata-only: envelope + flags + BODYSTRUCTURE (attachment metadata, no
+// bytes), no raw source. Used for the cold INBOX backfill of everything past the
+// full-content window — the whole mailbox stays searchable offline, with
+// attachment indicators, while only the recent slice carries body/html.
+const FETCH_META = { uid: true, envelope: true, flags: true, bodyStructure: true } as const;
 
-// Fetch a set of UIDs and insert new rows. Returns [inserted, maxUid].
-async function fetchInsert(client: ImapFlow, store: Store, acc: Account, cls: string, uids: number[]): Promise<[number, number]> {
+// Rows are inserted in batches of this many (one transaction per batch) so a
+// large sweep commits ~hundreds of times, not once per row.
+const INSERT_BATCH = 500;
+
+// Live sync progress. `done` counts messages processed from the server (not just
+// newly inserted), so the bar advances even on a re-run where most rows already
+// exist. phase: "full" = recent body slice, "sweep" = whole-inbox metadata,
+// "new" = forward-only arrivals.
+export type SyncEvent = { account: string; folder: string; phase: "full" | "sweep" | "new" | "done" | "failed"; done: number; total: number };
+export type SyncProgress = (ev: SyncEvent) => void;
+
+// Fetch a set of UIDs (chunked so the UID list per FETCH command stays bounded)
+// and insert new rows in batched transactions. `report(done,total)` fires per
+// batch with messages processed so far. Returns [inserted, maxUid].
+async function fetchInsert(
+  client: ImapFlow,
+  store: Store,
+  acc: Account,
+  cls: string,
+  uids: number[],
+  report?: (done: number, total: number) => void,
+): Promise<[number, number]> {
   let inserted = 0;
   let maxUid = 0;
+  let processed = 0;
+  let batch: NewMessage[] = [];
+  const flush = () => {
+    if (batch.length) {
+      inserted += store.insertMany(batch);
+      batch = [];
+      report?.(processed, uids.length);
+    }
+  };
   for (let i = 0; i < uids.length; i += FETCH_CHUNK) {
     const chunk = uids.slice(i, i + FETCH_CHUNK);
     for await (const msg of client.fetch(chunk, FETCH_OPTS, { uid: true })) {
       if (msg.uid > maxUid) maxUid = msg.uid;
-      if (await insertFromFetch(store, acc, cls, msg as any)) inserted++;
+      processed++;
+      batch.push(await buildMessage(acc, cls, msg as any));
+      if (batch.length >= INSERT_BATCH) flush();
     }
   }
+  flush();
   return [inserted, maxUid];
 }
 
 // Envelope-only sweep over a sequence-number range [start,end]. Inserts metadata
 // rows (no body/html); their bodies are fetched on demand when opened, or cached
-// later if they fall into an offline category. Returns [inserted, maxUid].
+// later if they fall into an offline category. `report(done,total)` fires per
+// batch. Returns [inserted, maxUid].
+//
+// Chunked with per-chunk reconnect+retry: Yahoo drops long-running FETCH
+// commands, so a single stream over the whole inbox would abort partway. Each
+// SWEEP_CHUNK-sized command is retried on a dropped connection; a chunk that
+// still fails after SWEEP_RETRIES throws so the caller knows the sweep is
+// incomplete (it must not be reported as done). Already-inserted rows are kept —
+// a re-run resumes from where it stopped because the held count has grown.
 async function fetchMetaRange(
-  client: ImapFlow,
   store: Store,
   acc: Account,
   cls: string,
+  imapName: string,
   start: number,
   end: number,
+  report?: (done: number, total: number) => void,
 ): Promise<[number, number]> {
   let inserted = 0;
   let maxUid = 0;
-  for (let lo = start; lo <= end; lo += FETCH_CHUNK) {
-    const hi = Math.min(lo + FETCH_CHUNK - 1, end);
-    for await (const msg of client.fetch(`${lo}:${hi}`, FETCH_META)) {
-      if (msg.uid > maxUid) maxUid = msg.uid;
-      if (await insertFromFetch(store, acc, cls, msg as any)) inserted++;
+  let processed = 0;
+  const total = end - start + 1;
+
+  let client = await getClient(acc);
+  await client.mailboxOpen(imapName, { readOnly: true });
+
+  for (let lo = start; lo <= end; lo += SWEEP_CHUNK) {
+    const hi = Math.min(lo + SWEEP_CHUNK - 1, end);
+    for (let attempt = 0; ; attempt++) {
+      const batch: NewMessage[] = [];
+      try {
+        for await (const msg of client.fetch(`${lo}:${hi}`, FETCH_META)) {
+          if (msg.uid > maxUid) maxUid = msg.uid;
+          batch.push(await buildMessage(acc, cls, msg as any));
+        }
+        inserted += store.insertMany(batch);
+        processed += hi - lo + 1;
+        report?.(Math.min(processed, total), total);
+        break; // chunk done
+      } catch (e) {
+        // Connection likely dropped (Yahoo cuts long sessions). Discard the
+        // partial batch (re-fetching re-inserts safely — ON CONFLICT dedups),
+        // reconnect, and retry this chunk. Give up only after SWEEP_RETRIES.
+        if (attempt + 1 >= SWEEP_RETRIES) throw e;
+        dropClient(acc);
+        await sleep(500 * (attempt + 1));
+        client = await getClient(acc);
+        await client.mailboxOpen(imapName, { readOnly: true });
+      }
     }
   }
   return [inserted, maxUid];
@@ -220,7 +341,10 @@ async function syncOne(
   fetchLimit: number,
   fetchSinceDays: number,
   prefill: boolean,
+  onProgress?: SyncProgress,
 ): Promise<number> {
+  const report = (phase: SyncEvent["phase"]) => (done: number, total: number) =>
+    onProgress?.({ account: acc.name, folder: cls, phase, done, total });
   const mbox = await client.mailboxOpen(imapName, { readOnly: true });
   const uidValidity = Number(mbox.uidValidity);
   const exists = mbox.exists;
@@ -241,7 +365,7 @@ async function syncOne(
     const fresh = (await client.search({ uid: `${lastUid + 1}:*` }, { uid: true })) || [];
     const truly = fresh.filter((u) => u > lastUid);
     if (truly.length) {
-      const [n, mx] = await fetchInsert(client, store, acc, cls, truly);
+      const [n, mx] = await fetchInsert(client, store, acc, cls, truly, report("new"));
       inserted += n;
       if (mx > maxUid) maxUid = mx;
     }
@@ -251,7 +375,7 @@ async function syncOne(
     const found = (await client.search({ since }, { uid: true })) || [];
     const have = store.storedUIDs(acc.name, cls);
     const missing = found.filter((u) => !have.has(u));
-    const [n, mx] = await fetchInsert(client, store, acc, cls, missing);
+    const [n, mx] = await fetchInsert(client, store, acc, cls, missing, report("full"));
     inserted += n;
     if (mx > maxUid) maxUid = mx;
   } else {
@@ -266,7 +390,7 @@ async function syncOne(
       const uids: number[] = [];
       for await (const msg of client.fetch(`${start}:${topOlder}`, { uid: true })) uids.push(msg.uid);
       if (!uids.length) break;
-      const [n, mx] = await fetchInsert(client, store, acc, cls, uids);
+      const [n, mx] = await fetchInsert(client, store, acc, cls, uids, report("full"));
       inserted += n;
       if (mx > maxUid) maxUid = mx;
       if (n === 0) break;
@@ -281,7 +405,7 @@ async function syncOne(
       const held = store.countMessages(acc.name, cls);
       const olderTop = exists - held;
       if (olderTop > 0) {
-        const [n] = await fetchMetaRange(client, store, acc, cls, 1, olderTop);
+        const [n] = await fetchMetaRange(store, acc, cls, imapName, 1, olderTop, report("sweep"));
         inserted += n;
       }
     }
@@ -309,17 +433,22 @@ export async function syncAll(
   fetchSinceDays: number,
   inboxOnly = false,
   prefill = false,
+  onProgress?: SyncProgress,
 ): Promise<number> {
   // Pooled, kept-alive connection — no logout (see getClient).
   const client = await getClient(acc);
   try {
     if (inboxOnly) {
-      return await syncOne(client, store, acc, acc.mailbox, CLASS_INBOX, fetchLimit, fetchSinceDays, prefill);
+      return await syncOne(client, store, acc, acc.mailbox, CLASS_INBOX, fetchLimit, fetchSinceDays, prefill, onProgress);
     }
     const folders = foldersFromBoxes(await client.list(), acc);
     let total = 0;
     for (const f of folders) {
-      total += await syncOne(client, store, acc, f.name, f.class, fetchLimit, fetchSinceDays, prefill);
+      // Re-acquire the pooled client per folder: a mid-sweep reconnect inside
+      // syncOne (fetchMetaRange, on a Yahoo drop) evicts and replaces the pooled
+      // connection, so the outer `client` reference can go stale between folders.
+      const c = await getClient(acc);
+      total += await syncOne(c, store, acc, f.name, f.class, fetchLimit, fetchSinceDays, prefill, onProgress);
     }
     return total;
   } catch (e) {
@@ -485,21 +614,25 @@ export async function fetchBodies(
   imapName: string,
   uids: number[],
   onEach?: (done: number) => void,
-): Promise<Map<number, { text: string; html: string }>> {
-  const out = new Map<number, { text: string; html: string }>();
+): Promise<Map<number, { text: string; html: string; atts: Attachment[] }>> {
+  const out = new Map<number, { text: string; html: string; atts: Attachment[] }>();
   if (!uids.length) return out;
   const client = await getClient(acc);
   await client.mailboxOpen(imapName, { readOnly: true });
   let done = 0;
   for (let i = 0; i < uids.length; i += FETCH_CHUNK) {
     const chunk = uids.slice(i, i + FETCH_CHUNK);
-    for await (const msg of client.fetch(chunk, { uid: true, source: true }, { uid: true })) {
+    for await (const msg of client.fetch(chunk, { uid: true, bodyStructure: true, source: true }, { uid: true })) {
       done++;
       onEach?.(done);
       if (!(msg as any).source) continue;
       try {
         const p = await simpleParser((msg as any).source);
-        out.set(msg.uid, { text: p.text ?? "", html: typeof p.html === "string" ? p.html : "" });
+        out.set(msg.uid, {
+          text: p.text ?? "",
+          html: typeof p.html === "string" ? p.html : "",
+          atts: attsFromStructure((msg as any).bodyStructure),
+        });
       } catch {
         /* unparseable — omit so the caller retries or leaves it metadata-only */
       }
