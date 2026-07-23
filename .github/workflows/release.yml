@@ -34,11 +34,12 @@ jobs:
       - name: Release notes
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          # Print the lines between "## [VERSION]" and the next "## [" header,
-          # dropping both boundary lines — i.e. just this version's entries.
+          # Print the lines under "## [VERSION]", stopping at the next version
+          # header OR the link-reference block at the bottom of the file — i.e.
+          # just this version's entries.
           awk -v v="## [$VERSION]" '
             index($0, v) == 1 { grab = 1; next }
-            /^## \[/ && grab { exit }
+            grab && (/^## \[/ || /^\[[^]]*\]: /) { exit }
             grab { print }
           ' CHANGELOG.md > /tmp/release-notes.md
           cat .github/release-footer.md >> /tmp/release-notes.md
