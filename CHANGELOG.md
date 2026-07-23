@@ -20,6 +20,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Offline-category backfill now bulk-fetches bodies per account (chunked UID
   FETCH) with a two-pass retry, instead of one fragile request per message.
 
+### Removed
+- CI typecheck workflow (`.github/workflows/ci.yml`); type checking is run
+  locally until a proper lint + test suite is added.
+
 ## [1.0.0] - 2026-07-23
 
 First public release.
