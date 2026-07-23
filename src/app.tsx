@@ -22,6 +22,7 @@ import { warmConnections } from "./mail.ts";
 import { fit, oneLine } from "./text.ts";
 
 const SIDEBAR_W = 26;
+const PAGE = 200; // lazy-load window: rows fetched per view, grown as you scroll down
 const PINK = "#5fd7ff"; // primary accent (header, focus borders, prompt) — powerline cyan
 const BLUE = "#00afd7"; // secondary accent (section headers)
 const DIM = "#9e9e9e";
@@ -161,6 +162,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const [lastSync, setLastSync] = createSignal<number>(0); // epoch ms of last successful sync
   const [listTop, setListTop] = createSignal(0); // list viewport top row
   const [sideTop, setSideTop] = createSignal(0); // sidebar viewport top row
+  const [limit, setLimit] = createSignal(PAGE); // rows loaded for the active view (grows on scroll)
 
   const bodyH = createMemo(() => Math.max(3, dims().height - 4));
   const listW = createMemo(() => Math.max(16, dims().width - SIDEBAR_W - 4));
@@ -189,7 +191,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   );
   const msgs = createMemo(() => {
     version();
-    return store.list(activeFilter());
+    return store.list(activeFilter(), limit());
   });
   const safeMsgIdx = createMemo(() => Math.max(0, Math.min(msgIdx(), msgs().length - 1)));
   const current = createMemo<MessageRow | undefined>(() => msgs()[safeMsgIdx()]);
@@ -287,6 +289,10 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   // reactivity means only the affected rows repaint, and follow() keeps the
   // window still while the cursor moves inside it.
   function moveTo(n: number) {
+    // Heading into the last loaded row while the view is still capped at the
+    // current limit → pull the next page in before clamping, so the cursor can
+    // keep going. msgs().length < limit() means the whole view is already loaded.
+    if (n >= msgs().length - 1 && msgs().length >= limit()) setLimit((l) => l + PAGE);
     const clamped = Math.max(0, Math.min(n, msgs().length - 1));
     setMsgIdx(clamped);
     setListTop((t) => follow(clamped, t, bodyH()));
@@ -299,6 +305,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     const next = nextSelectable(entries(), safeCatIdx(), dir);
     batch(() => {
       setSearch(null);
+      setLimit(PAGE);
       setCatIdx(next);
       setSideTop((t) => follow(next, t, bodyH()));
       moveTo(0);
@@ -311,6 +318,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     if (i < 0) return;
     batch(() => {
       setSearch(null);
+      setLimit(PAGE);
       setCatIdx(i);
       setSideTop((t) => follow(i, t, bodyH()));
       setFocus("list");
@@ -386,6 +394,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
         const d = draft().trim();
         batch(() => {
           setTyping(false);
+          setLimit(PAGE);
           setSearch(d ? d : null);
           setFocus("list");
           moveTo(0);
@@ -404,7 +413,15 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       // Type-to-filter: arrows navigate, printable chars edit the query (so j/k
       // are query text here, not navigation), enter picks, esc cancels.
       if (name === "escape") setPicker(null);
-      else if (name === "down") setPicker({ ...p, idx: Math.min(p.idx + 1, Math.max(0, filtered.length - 1)) });
+      else if (p.kind === "goto" && ch === "g" && p.query === "") {
+        // `gg`: g opened this goto picker, a second g (before typing) = vim-style
+        // jump to the top of the current list.
+        batch(() => {
+          setPicker(null);
+          setFocus("list");
+          moveTo(0);
+        });
+      } else if (name === "down") setPicker({ ...p, idx: Math.min(p.idx + 1, Math.max(0, filtered.length - 1)) });
       else if (name === "up") setPicker({ ...p, idx: Math.max(p.idx - 1, 0) });
       else if (name === "return" || name === "enter") {
         const choice = filtered[p.idx];
@@ -477,8 +494,11 @@ export function App(props: { dbPath: string; cfgPath: string }) {
 
     if (ch === "q") exit();
     else if (ch === "G") {
-      setFocus("list");
-      moveTo(msgs().length - 1); // bottom of list
+      batch(() => {
+        setLimit(Number.MAX_SAFE_INTEGER); // load the whole view, then jump to the true bottom
+        setFocus("list");
+        moveTo(msgs().length - 1);
+      });
     } else if (ch === "n") jumpUnread(1);
     else if (ch === "p") jumpUnread(-1);
     else if (ch === "/") {
@@ -487,8 +507,11 @@ export function App(props: { dbPath: string; cfgPath: string }) {
         setDraft(search() ?? "");
       });
     } else if (name === "escape" && search() !== null) {
-      setSearch(null); // clear search, back to sidebar filter
-      moveTo(0);
+      batch(() => {
+        setSearch(null); // clear search, back to sidebar filter
+        setLimit(PAGE);
+        moveTo(0);
+      });
     } else if ((name === "return" || name === "enter") && current()) setMode("reading");
     else if (name === "tab" || ch === "h" || ch === "l" || name === "left" || name === "right")
       setFocus(focus() === "sidebar" ? "list" : "sidebar");
