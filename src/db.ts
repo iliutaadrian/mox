@@ -226,8 +226,11 @@ CREATE TABLE IF NOT EXISTS approved_categories (
       case "search": {
         const built = buildSearch(f.query);
         if (!built) return [];
+        // By default search only INBOX + Sent — never Spam/Trash/Archive. If the
+        // query used an explicit `in:` (built.where mentions mailbox), respect it.
+        const guard = built.where.includes("mailbox") ? "" : "mailbox NOT IN ('Spam','Trash','Archive') AND ";
         return this.db.query(
-          `SELECT ${LIST_COLS} FROM messages WHERE ${built.where} ORDER BY date DESC LIMIT 2000`,
+          `SELECT ${LIST_COLS} FROM messages WHERE ${guard}(${built.where}) ORDER BY date DESC LIMIT 2000`,
         ).all(...built.params) as MessageRow[];
       }
     }
