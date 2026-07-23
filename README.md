@@ -107,6 +107,7 @@ bun src/cli.ts attach <id> [name]   # download an attachment on demand
 | `j` / `k`    | Scroll the email                        |
 | `h` / `l`    | Previous / next email                   |
 | `v`          | Open the full HTML email in the browser |
+| `D`          | Download attachments to ~/Downloads     |
 | `e`/`a`/`d`  | Done / archive / trash                  |
 | `u`          | Restore (in Trash/Archive/done)         |
 | `M` / `U`    | Mark read / unread on the server        |
