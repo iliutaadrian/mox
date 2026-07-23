@@ -4,18 +4,16 @@
 //
 //   bun ink/src/cli.ts sync                 fetch all folders + rule-file
 //   bun ink/src/cli.ts attach <id> [name]   download an attachment to cwd
-import { resolve, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { writeFileSync } from "node:fs";
 
 import { Store, CLASS_INBOX } from "./db.ts";
 import { loadConfig } from "./config.ts";
 import { refresh, backfillOffline } from "./engine.ts";
 import { detectFolders, fetchAttachment } from "./mail.ts";
+import { resolveCfgPath, resolveDbPath } from "./paths.ts";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const cfgPath = process.env.MOX_CONFIG ?? join(repoRoot, "config.yaml");
-const store = new Store(process.env.MOX_DB ?? join(dirname(cfgPath), "mox.db"));
+const cfgPath = resolveCfgPath();
+const store = new Store(resolveDbPath(cfgPath));
 const cfg = loadConfig(cfgPath);
 
 const [cmd, ...rest] = process.argv.slice(2);

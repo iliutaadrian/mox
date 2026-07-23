@@ -4,23 +4,16 @@
 // Register with Claude Code (once):
 //   claude mcp add mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
 // or add to a project .mcp.json. Config/db are located exactly like the TUI
-// ($MOX_CONFIG / repo ./config.yaml / ~/.config/mox/config.yaml).
+// ($MOX_CONFIG / repo ./config.yaml / ~/Documents/mox). See ./paths.ts.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { homedir } from "node:os";
-import { fileURLToPath } from "node:url";
 
 import { Store } from "./db.ts";
+import { resolveCfgPath, resolveDbPath } from "./paths.ts";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const cfgPath =
-  [process.env.MOX_CONFIG, join(repoRoot, "config.yaml"), join(homedir(), ".config", "mox", "config.yaml")].find(
-    (p) => p && existsSync(p),
-  ) ?? join(repoRoot, "config.yaml");
-const dbPath = process.env.MOX_DB ?? join(dirname(cfgPath), "mox.db");
+const cfgPath = resolveCfgPath();
+const dbPath = resolveDbPath(cfgPath);
 const store = new Store(dbPath);
 
 const server = new McpServer({ name: "mox", version: "1.0.0" });
