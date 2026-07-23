@@ -5,13 +5,43 @@
 //   installed:  mox                         (uses ~/Documents/mox/config.yaml)
 import { render } from "@opentui/solid";
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, basename } from "node:path";
+import { spawnSync } from "node:child_process";
 
 import { App } from "./app.tsx";
 import { Store } from "./db.ts";
 import { loadConfig } from "./config.ts";
 import { prefill } from "./engine.ts";
 import { DATA_DIR, resolveCfgPath, resolveDbPath } from "./paths.ts";
+import pkg from "../package.json";
+
+const args = process.argv.slice(2);
+
+// `mox --version` / `-v`: print the build version and exit. No config needed.
+if (args.includes("--version") || args.includes("-v")) {
+  console.log(`mox ${pkg.version}`);
+  process.exit(0);
+}
+
+// `mox upgrade`: re-run the canonical installer, targeting the directory of the
+// currently-running binary — so it downloads the latest release and overwrites
+// this executable in place. Only meaningful for the compiled binary; when run
+// from source, process.execPath is the Bun interpreter, so we bail with advice.
+if (args[0] === "upgrade") {
+  const exe = process.execPath;
+  if (basename(exe) === "bun") {
+    console.error("`mox upgrade` only works on the installed binary.\nRunning from source — update with: git pull && bun run build");
+    process.exit(1);
+  }
+  const dir = dirname(exe);
+  console.log(`upgrading mox in ${dir} (current: ${pkg.version})…`);
+  const r = spawnSync(
+    "bash",
+    ["-c", "curl -fsSL https://raw.githubusercontent.com/iliutaadrian/mox/main/install.sh | bash"],
+    { stdio: "inherit", env: { ...process.env, MOX_INSTALL_DIR: dir } },
+  );
+  process.exit(r.status ?? 1);
+}
 
 // Safety net: a background IMAP socket error (idle connection dropped by the
 // server) must never crash the TUI. Handlers on each client already evict dead
@@ -39,7 +69,7 @@ if (!existsSync(cfgPath)) {
 // `mox --prefill`: one-time headless bulk seed — sweep envelope-only metadata
 // over the whole INBOX (searchable offline) and cache full bodies for the
 // offline categories, then exit. Normal launch fetches only `fetch_limit`.
-if (process.argv.slice(2).includes("--prefill")) {
+if (args.includes("--prefill")) {
   const store = new Store(dbPath);
   const cfg = loadConfig(cfgPath);
 

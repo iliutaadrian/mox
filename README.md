@@ -160,6 +160,8 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 `r` refreshes **INBOX** over pooled, pre-warmed IMAP connections and reconciles **Trash/Archive** (drops local rows removed on the server). Deeper syncs run headless:
 
 ```bash
+mox --version                       # print the installed version
+mox upgrade                         # download + install the latest release in place
 mox --prefill                       # one-time seed: metadata for the WHOLE inbox
                                     #   + full bodies for offline_categories, then exit
 bun src/cli.ts sync                 # fetch ALL folders + rule-file, then exit
@@ -169,6 +171,14 @@ bun src/cli.ts attach <id> [name]   # download an attachment on demand
 A normal launch only pulls the most recent `fetch_limit` messages with full content. `mox --prefill` additionally sweeps **envelope-only metadata** over every older INBOX message (so the whole inbox is searchable offline; bodies fetch on demand when opened), and caches full bodies for the `offline_categories`.
 
 <p align="center"><img src="docs/prefill.png" alt="mox --prefill terminal output" width="620"></p>
+
+### Updating
+
+mox has no auto-update — the binary never phones home. To update, either run `mox upgrade`, or re-run the installer (both overwrite the binary in place; your data in `~/Documents/mox/` is untouched):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/iliutaadrian/mox/main/install.sh | bash
+```
 
 ---
 
