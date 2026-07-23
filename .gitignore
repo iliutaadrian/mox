@@ -5,6 +5,12 @@ node_modules/
 *.db
 config.yaml
 .env
+# …but the fictional demo config used to render README screenshots IS tracked
+# (the demo DB itself is regenerated from docs/demo/seed.ts, so it stays ignored)
+!docs/demo/config.yaml
+
+# VHS scratch output (screenshots are committed; the recording gifs are not)
+docs/tapes/.out*.gif
 
 # task-observer skill log (not part of the app)
 skill-observations/
