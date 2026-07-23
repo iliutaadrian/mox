@@ -1,0 +1,79 @@
+# Demo config used only to render the README screenshots. All accounts and
+# senders are fictional. Regenerate the demo DB with: bun docs/demo/seed.ts
+fetch_limit: 200
+content_days: 90
+offline_categories: []
+inbox_exclude: [Muted]
+
+accounts:
+  - name: Personal
+    imap_host: imap.example.com
+    imap_port: 993
+    imap_user: you@example.com
+    imap_pass: "demo"
+    mailbox: INBOX
+    from: you@example.com
+  - name: Secondary
+    imap_host: imap.example.com
+    imap_port: 993
+    imap_user: you@fastmail.example
+    imap_pass: "demo"
+    mailbox: INBOX
+    from: you@fastmail.example
+  - name: Work
+    imap_host: imap.example.com
+    imap_port: 993
+    imap_user: you@acme.example
+    imap_pass: "demo"
+    mailbox: INBOX
+    from: you@acme.example
+
+categories:
+  - name: Muted
+    description: Muted senders — hidden from every view except Muted.
+    match:
+      domains: [linkedin.com, jobalerts.example]
+  - name: Calendar
+    description: Meeting and calendar invitations and responses.
+    match:
+      words: [invitation, invite]
+  - name: Business
+    description: Admin, contracts and tax paperwork.
+    match:
+      domains: [tax.example]
+      words: [contract]
+  - name: Work
+    description: Colleagues, Jira, Slack, GitHub, CI.
+    match:
+      domains: [acme.example, github.com, slack.com, atlassian.example]
+  - name: Finance
+    description: Banking, brokerage and crypto statements.
+    match:
+      domains: [northbank.example, brokerage.example, coinwallet.example]
+  - name: Bills
+    description: Utility and telecom invoices.
+    match:
+      domains: [power-co.example, fibernet.example]
+      words: [invoice, bill, receipt]
+  - name: Shopping
+    description: Orders, shipping and delivery.
+    match:
+      domains: [shopmart.example, swiftship.example]
+  - name: Travel
+    description: Flights, hotels and trip bookings.
+    match:
+      domains: [flyaway.example, staycation.example]
+  - name: Fitness
+    description: Gyms, running and cycling.
+    match:
+      domains: [strava.com, ironpeak.example]
+  - name: Newsletters
+    description: Subscriptions, digests and blogs.
+    match:
+      domains: [morningbrew.example, thebrief.example]
+  - name: Notifications
+    description: Automated service and account notices.
+    match:
+      domains: [apple.com, notify.example]
+  - name: Other
+    description: Anything that does not match a rule above.
