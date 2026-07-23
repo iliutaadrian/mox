@@ -65,9 +65,9 @@ Three honest reasons:
 curl -fsSL https://raw.githubusercontent.com/iliutaadrian/mox/main/install.sh | bash
 ```
 
-Installs the right binary for your chip (Apple Silicon / Intel) to `~/.local/bin/mox`. No Bun, no `node_modules`, nothing else to install. Set `MOX_INSTALL_DIR` to change the location.
+Installs the Apple Silicon binary to `~/.local/bin/mox`. No Bun, no `node_modules`, nothing else to install. Set `MOX_INSTALL_DIR` to change the location.
 
-Prefer to do it by hand? Grab `mox-darwin-arm64` (or `-x64`) from the [latest release](https://github.com/iliutaadrian/mox/releases/latest), `chmod +x`, and drop it on your `PATH`.
+Prefer to do it by hand? Grab `mox-darwin-arm64` from the [latest release](https://github.com/iliutaadrian/mox/releases/latest), `chmod +x`, and drop it on your `PATH`. **Intel Macs:** no prebuilt binary yet — [run from source](#run-from-source-dev).
 
 ### Run from source (dev)
 

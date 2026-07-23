@@ -23,8 +23,8 @@ First public release.
 - Goto shortcuts and unread navigation (`g`, `n`/`p`, `gg`/`G`), live search.
 - Attachment download (single and per-email subfolder).
 - Read-only MCP server exposing mail search/get/list/stats to Claude.
-- Prebuilt macOS binaries (Apple Silicon + Intel) and a `curl | bash`
-  installer; single-folder data directory at `~/Documents/mox`.
+- Prebuilt macOS binary (Apple Silicon) and a `curl | bash` installer;
+  single-folder data directory at `~/Documents/mox`.
 
 [Unreleased]: https://github.com/iliutaadrian/mox/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/iliutaadrian/mox/releases/tag/v1.0.0

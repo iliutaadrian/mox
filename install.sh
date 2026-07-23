@@ -25,7 +25,10 @@ fi
 
 case "$(uname -m)" in
   arm64)  asset="mox-darwin-arm64" ;;
-  x86_64) asset="mox-darwin-x64" ;;
+  x86_64)
+    red "No prebuilt binary for Intel Macs yet."
+    dim "Run from source instead: https://github.com/$REPO#run-from-source-dev"
+    exit 1 ;;
   *)      red "unsupported architecture: $(uname -m)"; exit 1 ;;
 esac
 
