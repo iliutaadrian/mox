@@ -207,7 +207,9 @@ async function syncOne(
   let maxUid = lastUid;
 
   if (lastUid > 0) {
-    // Warm: forward-only. Just new arrivals above the highest UID we hold.
+    // Warm: forward-only. Fetch all new arrivals above the highest UID we hold.
+    // Normally a handful per refresh; after a long offline stretch it catches
+    // up the whole backlog in one background pass (the UI never blocks on it).
     const fresh = (await client.search({ uid: `${lastUid + 1}:*` }, { uid: true })) || [];
     const truly = fresh.filter((u) => u > lastUid);
     if (truly.length) {
@@ -242,15 +244,12 @@ async function syncOne(
     }
   }
 
-  // Reconcile server-side removals: if a message was trashed/moved/expunged
-  // outside spark-cli, its UID is gone from this folder — drop the local row so
-  // the inbox and category views stay in sync with the server.
-  try {
-    const serverUids = new Set<number>((await client.search({ all: true }, { uid: true })) || []);
-    const stored = store.storedUIDs(acc.name, cls);
-    const gone = [...stored].filter((u) => !serverUids.has(u));
-    if (gone.length) store.deleteUIDs(acc.name, cls, gone);
-  } catch {}
+  // NOTE: no deletion-reconcile here. `SEARCH ALL` is unreliable for this —
+  // Yahoo caps SEARCH results (~1000) even for a 5k+ mailbox, so every UID past
+  // the cap looks "gone" and got mass-deleted (repeatedly, once auto-refresh
+  // ran it every 10s). Leaving a stale local row when mail is deleted on the
+  // server is harmless; wiping the local corpus is not. Deletions are handled
+  // explicitly by the trash/archive actions instead.
 
   store.setSyncState(acc.name, cls, uidValidity, maxUid);
   return inserted;
@@ -301,8 +300,14 @@ export async function reconcileFolders(store: Store, acc: Account, classes: stri
     // from it) and listing its tens of thousands of UIDs on every refresh is
     // pointlessly slow.
     if (/all mail/i.test(f.name)) continue;
-    await client.mailboxOpen(f.name, { readOnly: true });
+    const mbox = await client.mailboxOpen(f.name, { readOnly: true });
     const serverUids = new Set<number>((await client.search({ all: true }, { uid: true })) || []);
+    // SAFETY: `SEARCH ALL` is capped on some servers (Yahoo ~1000), so an
+    // incomplete result would make most local rows look "gone". Only trust the
+    // result — and thus delete — when it plausibly covers the whole folder
+    // (server reports as many messages as SEARCH returned). Otherwise skip;
+    // a stale local row is harmless, a mass wipe is not.
+    if (serverUids.size < mbox.exists) continue;
     const stored = store.storedUIDs(acc.name, f.class);
     const gone = [...stored].filter((u) => !serverUids.has(u));
     if (gone.length) store.deleteUIDs(acc.name, f.class, gone);
