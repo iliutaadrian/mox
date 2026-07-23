@@ -114,6 +114,12 @@ function renderEmailBody(html: string, body: string, width: number): string {
   return body;
 }
 
+// Case-insensitive substring filter for picker options (empty query = all).
+function filterOpts(options: string[], query: string): string[] {
+  const q = query.trim().toLowerCase();
+  return q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
+}
+
 function nextSelectable(entries: SideEntry[], idx: number, dir: 1 | -1): number {
   let i = idx + dir;
   while (i >= 0 && i < entries.length) {
@@ -148,7 +154,8 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const [status, setStatus] = createSignal("Press r to fetch new mail");
   const [busy, setBusy] = createSignal(false);
   const [scroll, setScroll] = createSignal(0);
-  const [picker, setPicker] = createSignal<{ kind: "move"; options: string[]; idx: number } | null>(null);
+  const [picker, setPicker] = createSignal<{ kind: "move"; options: string[]; idx: number; query: string } | null>(null);
+  const [pendingG, setPendingG] = createSignal(false); // `g` leader armed, awaiting goto target
   const [search, setSearch] = createSignal<string | null>(null); // committed query
   const [typing, setTyping] = createSignal(false); // search input active
   const [draft, setDraft] = createSignal("");
@@ -299,6 +306,37 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     });
   }
 
+  // Jump the active view to the first sidebar entry matching `pred` (goto
+  // shortcuts). Focuses the list so the target is immediately actionable.
+  function gotoEntry(pred: (e: SideEntry) => boolean, label: string) {
+    const es = entries();
+    const i = es.findIndex(pred);
+    if (i < 0) {
+      setStatus(`no ${label}`);
+      return;
+    }
+    batch(() => {
+      setSearch(null);
+      setCatIdx(i);
+      setSideTop((t) => follow(i, t, bodyH()));
+      setFocus("list");
+      moveTo(0);
+    });
+  }
+
+  // Move the list cursor to the next/prev unread message (no wrap).
+  function jumpUnread(dir: 1 | -1) {
+    const m = msgs();
+    setFocus("list");
+    for (let i = safeMsgIdx() + dir; i >= 0 && i < m.length; i += dir) {
+      if (!m[i]!.seen) {
+        moveTo(i);
+        return;
+      }
+    }
+    setStatus("no more unread");
+  }
+
   async function doBackend(label: string, fn: () => { ok: boolean; out: string } | Promise<{ ok: boolean; out: string }>) {
     if (busy()) return;
     setBusy(true);
@@ -368,14 +406,22 @@ export function App(props: { dbPath: string; cfgPath: string }) {
 
     if (picker()) {
       const p = picker()!;
-      if (name === "escape" || ch === "q") setPicker(null);
-      else if (ch === "j" || name === "down") setPicker({ ...p, idx: Math.min(p.idx + 1, p.options.length - 1) });
-      else if (ch === "k" || name === "up") setPicker({ ...p, idx: Math.max(p.idx - 1, 0) });
+      const filtered = filterOpts(p.options, p.query);
+      // Type-to-filter: arrows navigate, printable chars edit the query (so j/k
+      // are query text here, not navigation), enter picks, esc cancels.
+      if (name === "escape") setPicker(null);
+      else if (name === "down") setPicker({ ...p, idx: Math.min(p.idx + 1, Math.max(0, filtered.length - 1)) });
+      else if (name === "up") setPicker({ ...p, idx: Math.max(p.idx - 1, 0) });
       else if (name === "return" || name === "enter") {
-        const choice = p.options[p.idx]!;
+        const choice = filtered[p.idx];
+        if (!choice) return;
         const ids = targets();
         setPicker(null);
         void doBackend(`Moving ${ids.length} to ${choice}`, () => be.move(ids, choice));
+      } else if (name === "backspace" || name === "delete") {
+        setPicker({ ...p, query: p.query.slice(0, -1), idx: 0 });
+      } else if (ch && ch.length === 1 && ch >= " " && !e.ctrl && !e.meta) {
+        setPicker({ ...p, query: p.query + ch, idx: 0 });
       }
       return;
     }
@@ -423,7 +469,32 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       return;
     }
 
+    // `g` leader: first press arms, next key is the goto target (gi/ga/gs/gt/gr,
+    // gg = top of list). Any other key just disarms.
+    if (pendingG()) {
+      setPendingG(false);
+      if (ch === "i") gotoEntry((e) => e.kind === "inbox", "Inbox");
+      else if (ch === "a") gotoEntry((e) => e.kind === "all", "ALL");
+      else if (ch === "s") gotoEntry((e) => e.kind === "folder" && e.cls === "Sent", "Sent");
+      else if (ch === "t") gotoEntry((e) => e.kind === "folder" && e.cls === "Trash", "Trash");
+      else if (ch === "r") gotoEntry((e) => e.kind === "folder" && e.cls === "Archive", "Archive");
+      else if (ch === "g") {
+        setFocus("list");
+        moveTo(0); // gg -> top of list
+      }
+      return;
+    }
+    if (ch === "g") {
+      setPendingG(true);
+      return;
+    }
+
     if (ch === "q") exit();
+    else if (ch === "G") {
+      setFocus("list");
+      moveTo(msgs().length - 1); // bottom of list
+    } else if (ch === "n") jumpUnread(1);
+    else if (ch === "p") jumpUnread(-1);
     else if (ch === "/") {
       batch(() => {
         setTyping(true);
@@ -468,7 +539,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       else if (c?.done) markDone(targets(), false, `restored ${targets().length} to inbox`);
     } else if (ch === "m" && targets().length > 0) {
       const cats = [...new Set([...cfg.categories.map((c) => c.name), ...store.approvedCategories()])];
-      if (cats.length > 0) setPicker({ kind: "move", options: cats, idx: 0 });
+      if (cats.length > 0) setPicker({ kind: "move", options: cats, idx: 0, query: "" });
     } else if (ch === "v") openInBrowser();
   });
 
@@ -527,7 +598,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const hint = createMemo(() =>
     mode() === "reading"
       ? `j/k scroll · h/l prev/next · v html${hasAtts() ? " · D save" : ""} · ${actionHint()} · M/U read · esc/q back`
-      : `enter open · ${actionHint()} · m move · / search · r refresh · M/U read · q quit${selected().size > 0 ? ` · ${selected().size} selected` : ""}`,
+      : `enter open · ${actionHint()} · m move · g goto · n/p unread · / search · r refresh · q quit${selected().size > 0 ? ` · ${selected().size} selected` : ""}`,
   );
 
   const headerNote = createMemo(() =>
@@ -675,13 +746,14 @@ export function App(props: { dbPath: string; cfgPath: string }) {
 
       <Show when={picker()}>
         {(p) => {
-          // Window the options so a long list (many URLs) fits on screen, and
-          // clamp the box position so it never renders off the top.
-          const maxRows = () => Math.max(3, Math.min(p().options.length, dims().height - 6));
+          // Filter by the typed query, then window so a long list fits on
+          // screen, clamping the box position so it never renders off the top.
+          const filtered = () => filterOpts(p().options, p().query);
+          const maxRows = () => Math.max(1, Math.min(filtered().length, dims().height - 7));
           const w = 30;
-          const start = () => Math.max(0, Math.min(p().idx - Math.floor(maxRows() / 2), p().options.length - maxRows()));
-          const shown = () => p().options.slice(start(), start() + maxRows());
-          const boxH = () => maxRows() + 4;
+          const start = () => Math.max(0, Math.min(p().idx - Math.floor(maxRows() / 2), filtered().length - maxRows()));
+          const shown = () => filtered().slice(start(), start() + maxRows());
+          const boxH = () => maxRows() + 5;
           return (
             <box
               position="absolute"
@@ -697,17 +769,20 @@ export function App(props: { dbPath: string; cfgPath: string }) {
               paddingRight={2}
             >
               <text fg={PINK} attributes={TextAttributes.BOLD}>{`Move (${targets().length} email(s)):`}</text>
-              <For each={shown()}>
-                {(o, i) => {
-                  const abs = () => start() + i();
-                  return (
-                    <text bg={abs() === p().idx ? PINK : undefined} fg={abs() === p().idx ? BLACK : undefined}>
-                      {fit((abs() === p().idx ? "> " : "  ") + o, w)}
-                    </text>
-                  );
-                }}
-              </For>
-              <text fg={DIM}>j/k move · enter choose · esc cancel</text>
+              <text fg={p().query ? BLUE : DIM}>{fit(`/${p().query}▏`, w)}</text>
+              <Show when={filtered().length > 0} fallback={<text fg={DIM}>{fit("no match", w)}</text>}>
+                <For each={shown()}>
+                  {(o, i) => {
+                    const abs = () => start() + i();
+                    return (
+                      <text bg={abs() === p().idx ? PINK : undefined} fg={abs() === p().idx ? BLACK : undefined}>
+                        {fit((abs() === p().idx ? "> " : "  ") + o, w)}
+                      </text>
+                    );
+                  }}
+                </For>
+              </Show>
+              <text fg={DIM}>type filter · ↑/↓ move · enter · esc</text>
             </box>
           );
         }}
