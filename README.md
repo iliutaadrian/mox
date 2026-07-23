@@ -10,6 +10,12 @@
 
 <img src="docs/inbox.png" width="820" alt="Three-pane inbox: category sidebar with per-view counts, message list colored by category, footer key hints">
 
+<br>
+
+<img src="docs/demo.gif" width="820" alt="Demo: jump INBOX → ALL → Work with the goto picker, mark an email done so it leaves the inbox, then restore it from ALL">
+
+*`g` jumps between views · `e` marks an email done (it leaves the inbox) · `u` restores it — all keyboard, all local.*
+
 </div>
 
 ---
