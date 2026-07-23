@@ -275,6 +275,32 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     return new Map(rows.map((r) => [r.c, r.n]));
   }
 
+  /** Grouped counts for stats. dim = year | month | sender | category. Optional
+   * filters narrow by category / account / mailbox. Read-only aggregate. */
+  stats(
+    dim: "year" | "month" | "sender" | "category",
+    filter: { category?: string; account?: string; mailbox?: string } = {},
+    limit = 100,
+  ): { key: string; count: number; unread: number; first: string; last: string }[] {
+    const where: string[] = [];
+    const params: any[] = [];
+    if (filter.category) { where.push("category = ?"); params.push(filter.category); }
+    if (filter.account) { where.push("account = ?"); params.push(filter.account); }
+    if (filter.mailbox) { where.push("mailbox = ?"); params.push(filter.mailbox); }
+    const keyExpr =
+      dim === "year" ? "strftime('%Y', date, 'unixepoch')"
+      : dim === "month" ? "strftime('%Y-%m', date, 'unixepoch')"
+      : dim === "sender" ? "COALESCE(NULLIF(from_name,''), from_addr)"
+      : "COALESCE(NULLIF(category,''),'Uncategorized')";
+    const groupExpr = dim === "sender" ? "lower(from_addr)" : keyExpr;
+    const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    return this.db.query(
+      `SELECT ${keyExpr} AS key, COUNT(*) AS count, SUM(CASE WHEN seen=0 THEN 1 ELSE 0 END) AS unread,
+              MIN(date(date,'unixepoch')) AS first, MAX(date(date,'unixepoch')) AS last
+       FROM messages ${w} GROUP BY ${groupExpr} ORDER BY ${dim === "year" || dim === "month" ? "key" : "count DESC"} LIMIT ?`,
+    ).all(...params, limit) as any;
+  }
+
   folderCounts(): Map<string, number> {
     const rows = this.db.query(
       `SELECT mailbox, COUNT(*) AS n FROM messages WHERE mailbox IN ('Sent','Spam','Archive','Trash') GROUP BY mailbox`,

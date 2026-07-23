@@ -5,20 +5,23 @@
     "spark": "src/index.tsx"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentui/core": "0.4.5",
     "@opentui/solid": "0.4.5",
     "imapflow": "^1.4.7",
     "mailparser": "^3.9.14",
     "solid-js": "1.9.12",
     "string-width": "^8.2.2",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
   },
   "scripts": {
     "start": "bun --preload @opentui/solid/preload src/index.tsx",
     "sync": "bun src/cli.ts sync",
     "typecheck": "tsc --noEmit",
     "build": "bun run scripts/build.ts",
-    "install-bin": "bun run build && install -m 0755 dist/spark \"${PREFIX:-$HOME/.local/bin}/spark\" && echo installed to ${PREFIX:-$HOME/.local/bin}/spark"
+    "install-bin": "bun run build && install -m 0755 dist/spark \"${PREFIX:-$HOME/.local/bin}/spark\" && echo installed to ${PREFIX:-$HOME/.local/bin}/spark",
+    "mcp": "bun src/mcp.ts"
   },
   "devDependencies": {
     "@types/mailparser": "^3.4.6",
