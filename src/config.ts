@@ -28,6 +28,7 @@ export type Config = {
   fetchSinceDays: number;
   contentDays: number; // keep body/html only for mail newer than this; older = metadata-only, fetched on demand
   inboxExclude: string[]; // category names kept OUT of the INBOX view (still in ALL)
+  offlineCategories: string[]; // categories whose mail is fully cached offline (bodies never pruned, backfilled)
 };
 
 export function loadConfig(path: string): Config {
@@ -58,6 +59,7 @@ export function loadConfig(path: string): Config {
     fetchSinceDays: Number(raw.fetch_since_days ?? 0),
     contentDays: Number(raw.content_days ?? 90),
     inboxExclude: (raw.inbox_exclude ?? []).map(String),
+    offlineCategories: (raw.offline_categories ?? []).map(String),
   };
 }
 

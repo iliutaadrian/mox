@@ -15,6 +15,10 @@ fetch_limit: 200
 # opened (keeps the local DB small). 0 disables pruning. Default 90.
 content_days: 90
 
+# Categories kept fully cached offline (bodies never pruned; backfilled by
+# `spark sync` and `cli.ts offline`).
+offline_categories: []
+
 # Categories kept OUT of the INBOX and ALL views (still reachable via their own
 # sidebar entry). Use for noisy/muted buckets you never want in the main views.
 inbox_exclude: [Alerts, Muted]

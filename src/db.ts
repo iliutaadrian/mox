@@ -367,12 +367,28 @@ CREATE TABLE IF NOT EXISTS approved_categories (
 
   /** Drop stored body/html for mail older than the cutoff (unix seconds) —
    * older messages keep only metadata; their body is fetched on demand when
-   * opened. Returns rows pruned. */
-  pruneContent(cutoff: number): number {
+   * opened. `keep` categories are never pruned (offline-cached). Returns rows
+   * pruned. */
+  pruneContent(cutoff: number, keep: string[] = []): number {
+    const notIn = keep.length ? `AND (category IS NULL OR category NOT IN (${keep.map(() => "?").join(",")}))` : "";
     const res = this.db
-      .query("UPDATE messages SET body='', html='' WHERE date < ? AND (body <> '' OR html <> '')")
-      .run(cutoff);
+      .query(`UPDATE messages SET body='', html='' WHERE date < ? AND (body <> '' OR html <> '') ${notIn}`)
+      .run(cutoff, ...keep);
     return res.changes;
+  }
+
+  /** Messages in the given categories that have no cached body/html yet — the
+   * backfill targets for offline categories. */
+  missingBodyInCategories(cats: string[]): { id: number; account: string; mailbox: string; uid: number }[] {
+    if (!cats.length) return [];
+    const q = `SELECT id, account, mailbox, uid FROM messages
+      WHERE category IN (${cats.map(() => "?").join(",")}) AND COALESCE(body,'')='' AND COALESCE(html,'')=''`;
+    return this.db.query(q).all(...cats) as any;
+  }
+
+  /** Store a fetched body/html for one message (offline backfill / on-demand). */
+  setContent(id: number, body: string, html: string) {
+    this.db.query("UPDATE messages SET body=?, html=? WHERE id=?").run(body, html, id);
   }
 
   /** Follow a message that moved folders on the server: relabel its mailbox and

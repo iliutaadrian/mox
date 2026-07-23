@@ -10,7 +10,7 @@ import { writeFileSync } from "node:fs";
 
 import { Store, CLASS_INBOX } from "./db.ts";
 import { loadConfig } from "./config.ts";
-import { refresh } from "./engine.ts";
+import { refresh, backfillOffline } from "./engine.ts";
 import { detectFolders, fetchAttachment } from "./mail.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,6 +24,21 @@ switch (cmd) {
   case "sync": {
     const { fetched, filed } = await refresh(store, cfg);
     console.log(`fetched=${fetched} filed=${filed}`);
+    // After a sync, top up offline-category bodies for offline reading.
+    if (cfg.offlineCategories.length) {
+      const n = await backfillOffline(store, cfg, (d, t) => process.stdout.write(`\roffline backfill ${d}/${t}`));
+      if (n) process.stdout.write("\n");
+    }
+    break;
+  }
+  case "offline": {
+    // Download + cache full bodies for every message in the offline categories.
+    if (!cfg.offlineCategories.length) {
+      console.log("no offline_categories set in config");
+      break;
+    }
+    const n = await backfillOffline(store, cfg, (d, t) => process.stdout.write(`\rbackfilling ${d}/${t}`));
+    console.log(n ? `\ncached ${n} messages for ${cfg.offlineCategories.join(", ")}` : "nothing to backfill");
     break;
   }
   case "attach": {
@@ -44,7 +59,7 @@ switch (cmd) {
     break;
   }
   default:
-    console.error("usage: cli.ts sync | attach <id> [name]");
+    console.error("usage: cli.ts sync | offline | attach <id> [name]");
     process.exit(2);
 }
 store.close();
