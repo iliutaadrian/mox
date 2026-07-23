@@ -193,6 +193,21 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     return mode() === "reading" && c ? store.full(c.id) : null;
   });
 
+  // OpenTUI only auto-paints after an input event. State that changes
+  // out-of-band — async backend results (archive/trash/move via doBackend), the
+  // 10s auto-refresh, on-demand body fetches — marks the scene dirty but would
+  // otherwise not repaint until the next keypress. Track those signals and
+  // request a frame explicitly. (Sync, in-handler updates already repaint; the
+  // extra request there is a coalesced no-op.)
+  createEffect(() => {
+    version();
+    status();
+    busy();
+    fetchTick();
+    lastSync();
+    renderer.requestRender();
+  });
+
   // Auto-refresh the INBOX every 10s. Quiet: skips while a manual action is
   // running or a modal/search is open, never overlaps itself, and only bumps
   // the view (re-render) when the fetch actually changed something.
@@ -490,18 +505,29 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     } else scrollList(ev.scroll?.direction === "up" ? -3 : 3);
   };
 
-  const restorable = createMemo(() => {
+  // Available actions for the current selection. In Trash/Archive only restore
+  // applies; a done email can be restored to the inbox AND still archived,
+  // trashed or moved; an undone email can be marked done. (a/d/m keybinds are
+  // never gated by this — it only drives the hint text.)
+  const inTrashOrArchive = createMemo(() => {
     const f = activeFilter();
-    return (f.kind === "folder" && (f.class === "Trash" || f.class === "Archive")) || !!current()?.done;
+    return f.kind === "folder" && (f.class === "Trash" || f.class === "Archive");
   });
+  const actionHint = createMemo(() =>
+    inTrashOrArchive()
+      ? "u restore"
+      : current()?.done
+        ? "u restore · a archive · d trash"
+        : "e done · a archive · d trash",
+  );
   const hasAtts = createMemo(() => {
     const o = opened();
     return !!o?.attachments && o.attachments !== "" && o.attachments !== "[]";
   });
   const hint = createMemo(() =>
     mode() === "reading"
-      ? `j/k scroll · h/l prev/next · v html${hasAtts() ? " · D save" : ""}${restorable() ? " · u restore" : " · e done · a archive · d trash"} · M/U read · esc/q back`
-      : `enter open${restorable() ? " · u restore" : " · e done · a archive · d trash"} · m move · / search · r refresh · M/U read · q quit${selected().size > 0 ? ` · ${selected().size} selected` : ""}`,
+      ? `j/k scroll · h/l prev/next · v html${hasAtts() ? " · D save" : ""} · ${actionHint()} · M/U read · esc/q back`
+      : `enter open · ${actionHint()} · m move · / search · r refresh · M/U read · q quit${selected().size > 0 ? ` · ${selected().size} selected` : ""}`,
   );
 
   const headerNote = createMemo(() =>
