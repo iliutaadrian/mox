@@ -31,7 +31,7 @@ Three honest reasons:
 <div align="center">
 <img src="docs/reading.png" width="760" alt="Reading pane: headers, category tag, plain-text body; footer shows scroll / prev-next / html / done / archive / trash keys">
 
-*Open anything with `enter`. `v` opens the full HTML in your browser; `D` saves attachments.*
+*Open anything with `enter`. `v` opens the full HTML in your browser; `s` saves attachments.*
 </div>
 
 ---
@@ -40,13 +40,13 @@ Three honest reasons:
 
 | | |
 |---|---|
-| 🗂 **Category sidebar** | Every message is filed into a category on arrival. The sidebar shows **INBOX** (active mail only), **Mailboxes** (ALL + per-account), your **Filters** (categories), and server **Folders** (Sent / Spam / Archived / Trash) — each with a live count. |
-| ⚡ **Rule-based, instant** | Filing is deterministic: the first category whose `match` claims a message wins (`domains`, `addresses`, or subject/sender `words`). No AI, no API key, no network round-trip. Order in the config *is* precedence. |
+| 🗂 **Category sidebar** | New mail is filed into a category on fetch. The sidebar shows **INBOX** (active mail only), **Mailboxes** (ALL + per-account), your **Filters** (categories), and server **Folders** (Sent / Spam / Archived / Trash) — each with a live count. |
+| ⚡ **Rule-based, instant** | Filing is deterministic: the first category whose `match` claims a message wins (`domains`, `addresses`, or subject/sender `words`). No AI, no API key, no network round-trip. Order in the config *is* precedence. Edit the rules and run `mox --reclassify` to re-file existing mail — adds re-file, removals fall back to Uncategorized. |
 | 🔒 **Local by construction** | Categories and the local-only **done** state live only in your SQLite DB. mox never writes labels/folders to the server. Delete `~/Documents/mox` and it never happened. |
 | 🧹 **One-key triage** | `e` done · `a` archive · `d` trash — each with an inverse (`u`). Multi-select with `space`, then act on the whole batch. Read/unread (`M`/`U`) sync to the server; done is local. |
 | 🔀 **Type-to-filter move** | `m` opens a fuzzy picker over every category — type a few letters, `enter`, done. Same picker powers `g` **goto** for jumping between views. |
 | 🔎 **Live search** | `/` filters the current view as you type, with operators (`from:`, `subject:`, `is:unread`). `n`/`p` jump between unread. |
-| 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `D` — single file or a per-email subfolder. |
+| 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — single file or a per-email subfolder. |
 | 🤖 **MCP for Claude** | A read-only MCP server exposes `search` / `get` / `list` / `stats` over your mail, so Claude Code can sort the leftovers or answer "what did the bank send last week?" without touching your server. |
 
 <div align="center">
@@ -147,7 +147,7 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | `j` / `k` | Scroll the email |
 | `h` / `l` | Previous / next email |
 | `v` | Open the full HTML email in the browser |
-| `D` | Download attachments (subfolder if multiple) |
+| `s` | Save attachments (subfolder if multiple) |
 | `e`/`a`/`d` | Done / archive / trash |
 | `u` | Restore (in Trash / Archive / done) |
 | `M` / `U` | Mark read / unread on the server |
@@ -164,11 +164,16 @@ mox --version                       # print the installed version
 mox upgrade                         # download + install the latest release in place
 mox --prefill                       # one-time seed: metadata for the WHOLE inbox
                                     #   + full bodies for offline_categories, then exit
+mox --reclassify                    # re-file the whole inbox against the current
+                                    #   config rules (manual moves kept), then exit
+mox --stats                         # print a snapshot of downloaded/offline mail
 bun src/cli.ts sync                 # fetch ALL folders + rule-file, then exit
 bun src/cli.ts attach <id> [name]   # download an attachment on demand
 ```
 
 A normal launch only pulls the most recent `fetch_limit` messages with full content. `mox --prefill` additionally sweeps **envelope-only metadata** over every older INBOX message (so the whole inbox is searchable offline; bodies fetch on demand when opened), and caches full bodies for the `offline_categories`.
+
+Attachment presence is captured from IMAP **`BODYSTRUCTURE`** (no bytes downloaded) on every sync, so the list marks messages that carry files with a 📎. Files themselves are still fetched only on demand with `s`.
 
 <p align="center"><img src="docs/prefill.png" alt="mox --prefill terminal output" width="620"></p>
 
