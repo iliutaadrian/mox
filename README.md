@@ -1,7 +1,7 @@
 # spark-cli
 
 A fast terminal email client with **Spark-style categorization**, written in
-TypeScript (Ink/React on [Bun](https://bun.sh)). It fetches your mail over IMAP
+TypeScript ([OpenTUI](https://github.com/sst/opentui)/[Solid](https://www.solidjs.com) on [Bun](https://bun.sh)). It fetches your mail over IMAP
 into a local SQLite store, files each message by deterministic rules, and shows
 a three-pane inbox grouped by category.
 
@@ -124,7 +124,7 @@ IMAP  →  local SQLite (body + html + local category/done columns)
               ↓
         config rules file each INBOX message (first match wins)
               ↓
-        Ink TUI groups the inbox by category
+        OpenTUI/Solid TUI groups the inbox by category
 ```
 
 - `src/config.ts` — YAML config: accounts, categories, `match` rules.
@@ -132,5 +132,5 @@ IMAP  →  local SQLite (body + html + local category/done columns)
 - `src/mail.ts`   — imapflow fetch + mailparser; pooled connections; server moves.
 - `src/engine.ts` — fetch → rule-file → persist.
 - `src/backend.ts`— in-process actions (sync/mark/move/archive/trash + inverses).
-- `src/app.tsx`   — Ink/React interface.
+- `src/app.tsx`   — OpenTUI/Solid interface.
 - `src/cli.ts`    — headless entry (`sync`, `attach`).

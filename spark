@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
-# Launch spark-cli (Ink/TypeScript TUI) from anywhere.
-cd "$(dirname "$0")" && exec bun src/index.tsx "$@"
+# Launch spark-cli (OpenTUI/Solid TypeScript TUI) from anywhere.
+# --preload registers the Solid JSX transform (needed for `bun run` of source).
+cd "$(dirname "$0")" && exec bun --preload @opentui/solid/preload src/index.tsx "$@"
