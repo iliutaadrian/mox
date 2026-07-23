@@ -28,7 +28,7 @@ function connect(acc: Account): ImapFlow {
     port: acc.imapPort,
     secure: true,
     auth: { user: acc.imapUser, pass: acc.imapPass },
-    clientInfo: { name: "spark-cli", version: "1.0" },
+    clientInfo: { name: "mox", version: "1.0" },
     logger: false,
     // Keep idle pooled connections alive; if the server still drops one, the
     // 'error'/'close' handlers below evict it and the next use reconnects.

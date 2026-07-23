@@ -1,8 +1,8 @@
 {
-  "name": "spark-cli",
+  "name": "mox",
   "version": "1.0.0",
   "bin": {
-    "spark": "src/index.tsx"
+    "mox": "src/index.tsx"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -20,7 +20,7 @@
     "sync": "bun src/cli.ts sync",
     "typecheck": "tsc --noEmit",
     "build": "bun run scripts/build.ts",
-    "install-bin": "bun run build && install -m 0755 dist/spark \"${PREFIX:-$HOME/.local/bin}/spark\" && echo installed to ${PREFIX:-$HOME/.local/bin}/spark",
+    "install-bin": "bun run build && install -m 0755 dist/mox \"${PREFIX:-$HOME/.local/bin}/mox\" && echo installed to ${PREFIX:-$HOME/.local/bin}/mox",
     "mcp": "bun src/mcp.ts"
   },
   "devDependencies": {

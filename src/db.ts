@@ -424,7 +424,7 @@ CREATE TABLE IF NOT EXISTS approved_categories (
   }
 
   /** Remove local rows for UIDs no longer present in a server folder — keeps
-   * the local corpus in sync when mail is trashed/moved outside spark-cli. */
+   * the local corpus in sync when mail is trashed/moved outside mox. */
   deleteUIDs(account: string, mailbox: string, uids: number[]) {
     if (!uids.length) return;
     const q = `DELETE FROM messages WHERE account=? AND mailbox=? AND uid IN (${uids.map(() => "?").join(",")})`;

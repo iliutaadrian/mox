@@ -1,10 +1,10 @@
-// MCP server over the local spark-cli mail store (read-only). Lets Claude query
+// MCP server over the local mox mail store (read-only). Lets Claude query
 // your mail as first-class tools instead of shelling out to sqlite.
 //
 // Register with Claude Code (once):
-//   claude mcp add spark -- bun /ABSOLUTE/PATH/spark-cli/src/mcp.ts
+//   claude mcp add mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
 // or add to a project .mcp.json. Config/db are located exactly like the TUI
-// ($SPARK_CONFIG / repo ./config.yaml / ~/.config/spark-cli/config.yaml).
+// ($MOX_CONFIG / repo ./config.yaml / ~/.config/mox/config.yaml).
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -17,13 +17,13 @@ import { Store } from "./db.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cfgPath =
-  [process.env.SPARK_CONFIG, join(repoRoot, "config.yaml"), join(homedir(), ".config", "spark-cli", "config.yaml")].find(
+  [process.env.MOX_CONFIG, join(repoRoot, "config.yaml"), join(homedir(), ".config", "mox", "config.yaml")].find(
     (p) => p && existsSync(p),
   ) ?? join(repoRoot, "config.yaml");
-const dbPath = process.env.SPARK_DB ?? join(dirname(cfgPath), "spark-cli.db");
+const dbPath = process.env.MOX_DB ?? join(dirname(cfgPath), "mox.db");
 const store = new Store(dbPath);
 
-const server = new McpServer({ name: "spark-cli", version: "1.0.0" });
+const server = new McpServer({ name: "mox", version: "1.0.0" });
 
 server.registerTool(
   "search_emails",

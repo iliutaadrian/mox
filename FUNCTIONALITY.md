@@ -1,4 +1,4 @@
-# spark-cli — Implemented Functionality
+# mox — Implemented Functionality
 
 TUI email client. Bun + TypeScript + Ink/React. Pulls IMAP mail into a local SQLite corpus; browse, search, categorize, read. All logic in-process (no separate backend binary). ~1780 LOC across 10 files in `ink/src/`.
 
@@ -13,7 +13,7 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► Ink/React TUI
 
 - **Category lives ONLY in SQLite** — never written back to the mail server. Server is read-only except one op (`\Seen` flag).
 - **Two entry points:** `bun ink/src/index.tsx` (TUI), `bun ink/src/cli.ts <cmd>` (headless/scriptable).
-- **DB path:** `spark-cli.db` at repo root (WAL mode). Config: `config.yaml`.
+- **DB path:** `mox.db` at repo root (WAL mode). Config: `config.yaml`.
 
 ## Files
 

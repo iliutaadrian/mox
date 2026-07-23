@@ -1,4 +1,4 @@
-# spark-cli
+# mox
 
 A fast terminal email client with **Spark-style categorization**, written in
 TypeScript ([OpenTUI](https://github.com/sst/opentui)/[Solid](https://www.solidjs.com) on [Bun](https://bun.sh)). It fetches your mail over IMAP
@@ -27,31 +27,31 @@ bun install
 **Run from source (dev):**
 
 ```bash
-./spark            # launcher → bun src/index.tsx (uses ./config.yaml)
+./mox              # launcher → bun src/index.tsx (uses ./config.yaml)
 ```
 
 **Install as a standalone binary (like neomutt):**
 
 ```bash
-bun run install-bin        # builds + installs to ~/.local/bin/spark
+bun run install-bin        # builds + installs to ~/.local/bin/mox
 # or choose a location:
 PREFIX=/usr/local/bin bun run install-bin
 ```
 
-`bun run build` alone produces `dist/spark`, a single self-contained executable
+`bun run build` alone produces `dist/mox`, a single self-contained executable
 (no Bun or node_modules needed at runtime).
 
 ## Configure
 
 ```bash
 cp config.example.yaml config.yaml   # dev: keep it at the repo root
-# installed binary looks in ~/.config/spark-cli/config.yaml
+# installed binary looks in ~/.config/mox/config.yaml
 $EDITOR config.yaml
 ```
 
-Config lookup order: `$SPARK_CONFIG` → `./config.yaml` (repo, dev) →
-`~/.config/spark-cli/config.yaml`. The SQLite store is created next to the
-config (`$SPARK_DB` overrides). For Gmail/Yahoo use an **App Password**.
+Config lookup order: `$MOX_CONFIG` → `./config.yaml` (repo, dev) →
+`~/.config/mox/config.yaml`. The SQLite store is created next to the
+config (`$MOX_DB` overrides). For Gmail/Yahoo use an **App Password**.
 
 Categories are matched top-to-bottom; the first `match` that claims a message
 wins, so **order is precedence**. A `match` supports:

@@ -1,4 +1,4 @@
-// spark-cli TUI (OpenTUI/Solid). Sidebar (INBOX / Mailboxes / Filters / Other /
+// mox TUI (OpenTUI/Solid). Sidebar (INBOX / Mailboxes / Filters / Other /
 // Folders) + message list + reading view, all reading/writing the local SQLite
 // store in-process. Mail is filed deterministically by config rules; server
 // writes are limited to mark-read, archive, trash and their inverses.
@@ -154,8 +154,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const [status, setStatus] = createSignal("Press r to fetch new mail");
   const [busy, setBusy] = createSignal(false);
   const [scroll, setScroll] = createSignal(0);
-  const [picker, setPicker] = createSignal<{ kind: "move"; options: string[]; idx: number; query: string } | null>(null);
-  const [pendingG, setPendingG] = createSignal(false); // `g` leader armed, awaiting goto target
+  const [picker, setPicker] = createSignal<{ kind: "move" | "goto"; options: string[]; idx: number; query: string } | null>(null);
   const [search, setSearch] = createSignal<string | null>(null); // committed query
   const [typing, setTyping] = createSignal(false); // search input active
   const [draft, setDraft] = createSignal("");
@@ -306,15 +305,10 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     });
   }
 
-  // Jump the active view to the first sidebar entry matching `pred` (goto
-  // shortcuts). Focuses the list so the target is immediately actionable.
-  function gotoEntry(pred: (e: SideEntry) => boolean, label: string) {
-    const es = entries();
-    const i = es.findIndex(pred);
-    if (i < 0) {
-      setStatus(`no ${label}`);
-      return;
-    }
+  // Jump the active view to sidebar entry `i` (the goto picker's selection).
+  // Focuses the list so the target is immediately actionable.
+  function gotoIndex(i: number) {
+    if (i < 0) return;
     batch(() => {
       setSearch(null);
       setCatIdx(i);
@@ -363,7 +357,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       : `<!doctype html><meta charset=utf-8><pre style="white-space:pre-wrap;font:14px/1.5 system-ui">${body
           .replaceAll("&", "&amp;")
           .replaceAll("<", "&lt;")}</pre>`;
-    const p = join(tmpdir(), "spark-ink-preview.html");
+    const p = join(tmpdir(), "mox-preview.html");
     writeFileSync(p, doc);
     spawn("open", [p], { stdio: "ignore", detached: true }).unref();
     setStatus("Opened HTML in browser");
@@ -415,9 +409,13 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       else if (name === "return" || name === "enter") {
         const choice = filtered[p.idx];
         if (!choice) return;
-        const ids = targets();
         setPicker(null);
-        void doBackend(`Moving ${ids.length} to ${choice}`, () => be.move(ids, choice));
+        if (p.kind === "goto") {
+          gotoIndex(entries().findIndex((e) => e.kind !== "header" && e.label === choice));
+        } else {
+          const ids = targets();
+          void doBackend(`Moving ${ids.length} to ${choice}`, () => be.move(ids, choice));
+        }
       } else if (name === "backspace" || name === "delete") {
         setPicker({ ...p, query: p.query.slice(0, -1), idx: 0 });
       } else if (ch && ch.length === 1 && ch >= " " && !e.ctrl && !e.meta) {
@@ -469,23 +467,11 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       return;
     }
 
-    // `g` leader: first press arms, next key is the goto target (gi/ga/gs/gt/gr,
-    // gg = top of list). Any other key just disarms.
-    if (pendingG()) {
-      setPendingG(false);
-      if (ch === "i") gotoEntry((e) => e.kind === "inbox", "Inbox");
-      else if (ch === "a") gotoEntry((e) => e.kind === "all", "ALL");
-      else if (ch === "s") gotoEntry((e) => e.kind === "folder" && e.cls === "Sent", "Sent");
-      else if (ch === "t") gotoEntry((e) => e.kind === "folder" && e.cls === "Trash", "Trash");
-      else if (ch === "r") gotoEntry((e) => e.kind === "folder" && e.cls === "Archive", "Archive");
-      else if (ch === "g") {
-        setFocus("list");
-        moveTo(0); // gg -> top of list
-      }
-      return;
-    }
+    // `g` opens a type-to-filter picker over every view (Inbox, ALL, accounts,
+    // filters, folders) — pick one to jump the active view there.
     if (ch === "g") {
-      setPendingG(true);
+      const opts = entries().filter((e) => e.kind !== "header").map((e) => e.label);
+      if (opts.length > 0) setPicker({ kind: "goto", options: opts, idx: 0, query: "" });
       return;
     }
 
@@ -618,9 +604,9 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     <box flexDirection="column" width={dims().width} height={dims().height}>
       {/* header */}
       <box flexDirection="row">
-        <text fg={PINK} attributes={TextAttributes.BOLD}>spark-ink</text>
+        <text fg={PINK} attributes={TextAttributes.BOLD}>mox</text>
         <text fg={typing() ? BLUE : DIM}>
-          {fit(headerNote(), Math.max(0, dims().width - 9 - synced().length - 1))}
+          {fit(headerNote(), Math.max(0, dims().width - 3 - synced().length - 1))}
         </text>
         <text fg={DIM}>{synced()}</text>
       </box>
@@ -768,7 +754,9 @@ export function App(props: { dbPath: string; cfgPath: string }) {
               paddingLeft={2}
               paddingRight={2}
             >
-              <text fg={PINK} attributes={TextAttributes.BOLD}>{`Move (${targets().length} email(s)):`}</text>
+              <text fg={PINK} attributes={TextAttributes.BOLD}>
+                {p().kind === "goto" ? "Go to view:" : `Move (${targets().length} email(s)):`}
+              </text>
               <text fg={p().query ? BLUE : DIM}>{fit(`/${p().query}▏`, w)}</text>
               <Show when={filtered().length > 0} fallback={<text fg={DIM}>{fit("no match", w)}</text>}>
                 <For each={shown()}>
