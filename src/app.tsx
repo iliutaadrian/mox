@@ -22,13 +22,13 @@ import { warmConnections } from "./mail.ts";
 import { fit, oneLine } from "./text.ts";
 
 const SIDEBAR_W = 26;
-const PINK = "#ff5faf";
-const BLUE = "#00afff";
-const DIM = "#808080";
-const GRAY = "#666666";
-const CAT = "#87afaf";
-const DONE = "#5faf5f"; // ✓ marker for done mail (shown in non-inbox views)
-const BLACK = "#000000";
+const PINK = "#5fd7ff"; // primary accent (header, focus borders, prompt) — powerline cyan
+const BLUE = "#00afd7"; // secondary accent (section headers)
+const DIM = "#9e9e9e";
+const GRAY = "#4e4e4e"; // inactive borders — powerline gray
+const CAT = "#5faf87"; // category label — muted teal-green
+const DONE = "#87d787"; // ✓ marker for done mail (shown in non-inbox views)
+const BLACK = "#1c1c1c"; // popup bg — powerline dark
 
 type SideEntry =
   | { kind: "inbox"; label: string; exclude: string[] }
