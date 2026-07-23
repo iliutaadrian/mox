@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-14 # Apple Silicon
+            target: darwin-arm64
+          - runner: macos-13 # Intel
+            target: darwin-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      # Each runner is native to its target, so a plain host build picks up the
+      # correct @opentui/core-<platform> optional dep automatically.
+      - run: bun run scripts/build.ts "dist/mox-${{ matrix.target }}"
+      - run: chmod +x "dist/mox-${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mox-${{ matrix.target }}
+          path: dist/mox-${{ matrix.target }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd artifacts
+          shasum -a 256 mox-* > checksums.txt
+          cat checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/mox-darwin-arm64
+            artifacts/mox-darwin-x64
+            artifacts/checksums.txt
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/iliutaadrian/mox/main/install.sh | bash
+            ```
+
+            Or download the binary for your Mac below (`mox-darwin-arm64` for Apple Silicon, `mox-darwin-x64` for Intel), `chmod +x`, and move it onto your `PATH`.
