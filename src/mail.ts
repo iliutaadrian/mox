@@ -140,6 +140,10 @@ async function insertFromFetch(
 }
 
 const FETCH_OPTS = { uid: true, envelope: true, flags: true, source: true } as const;
+// Metadata-only: envelope + flags, no raw source. Used for the cold INBOX
+// backfill of everything past the full-content window — the whole mailbox stays
+// searchable offline while only the recent slice carries body/html.
+const FETCH_META = { uid: true, envelope: true, flags: true } as const;
 
 // Fetch a set of UIDs and insert new rows. Returns [inserted, maxUid].
 async function fetchInsert(client: ImapFlow, store: Store, acc: Account, cls: string, uids: number[]): Promise<[number, number]> {
@@ -148,6 +152,29 @@ async function fetchInsert(client: ImapFlow, store: Store, acc: Account, cls: st
   for (let i = 0; i < uids.length; i += FETCH_CHUNK) {
     const chunk = uids.slice(i, i + FETCH_CHUNK);
     for await (const msg of client.fetch(chunk, FETCH_OPTS, { uid: true })) {
+      if (msg.uid > maxUid) maxUid = msg.uid;
+      if (await insertFromFetch(store, acc, cls, msg as any)) inserted++;
+    }
+  }
+  return [inserted, maxUid];
+}
+
+// Envelope-only sweep over a sequence-number range [start,end]. Inserts metadata
+// rows (no body/html); their bodies are fetched on demand when opened, or cached
+// later if they fall into an offline category. Returns [inserted, maxUid].
+async function fetchMetaRange(
+  client: ImapFlow,
+  store: Store,
+  acc: Account,
+  cls: string,
+  start: number,
+  end: number,
+): Promise<[number, number]> {
+  let inserted = 0;
+  let maxUid = 0;
+  for (let lo = start; lo <= end; lo += FETCH_CHUNK) {
+    const hi = Math.min(lo + FETCH_CHUNK - 1, end);
+    for await (const msg of client.fetch(`${lo}:${hi}`, FETCH_META)) {
       if (msg.uid > maxUid) maxUid = msg.uid;
       if (await insertFromFetch(store, acc, cls, msg as any)) inserted++;
     }
@@ -192,6 +219,7 @@ async function syncOne(
   cls: string,
   fetchLimit: number,
   fetchSinceDays: number,
+  prefill: boolean,
 ): Promise<number> {
   const mbox = await client.mailboxOpen(imapName, { readOnly: true });
   const uidValidity = Number(mbox.uidValidity);
@@ -227,7 +255,8 @@ async function syncOne(
     inserted += n;
     if (mx > maxUid) maxUid = mx;
   } else {
-    // Cold backfill, count-based: pull progressively older mail.
+    // Cold backfill, count-based: pull the most-recent `fetchLimit` messages
+    // with FULL content (body/html + attachment metadata).
     while (true) {
       const held = store.countMessages(acc.name, cls);
       if (held >= fetchLimit || held >= exists) break;
@@ -241,6 +270,20 @@ async function syncOne(
       inserted += n;
       if (mx > maxUid) maxUid = mx;
       if (n === 0) break;
+    }
+    // Prefill mode, INBOX only: sweep envelope-only metadata over everything
+    // OLDER than the full-content window, so the whole mailbox is searchable
+    // offline (bodies fetched on demand, or cached for offline categories). The
+    // recent full slice is seq (exists-held+1..exists); the remainder is seq
+    // 1..olderTop. maxUid is unchanged — these are older (lower) UIDs, so
+    // forward-only refresh still resumes from the newest message.
+    if (prefill && cls === CLASS_INBOX) {
+      const held = store.countMessages(acc.name, cls);
+      const olderTop = exists - held;
+      if (olderTop > 0) {
+        const [n] = await fetchMetaRange(client, store, acc, cls, 1, olderTop);
+        inserted += n;
+      }
     }
   }
 
@@ -265,17 +308,18 @@ export async function syncAll(
   fetchLimit: number,
   fetchSinceDays: number,
   inboxOnly = false,
+  prefill = false,
 ): Promise<number> {
   // Pooled, kept-alive connection — no logout (see getClient).
   const client = await getClient(acc);
   try {
     if (inboxOnly) {
-      return await syncOne(client, store, acc, acc.mailbox, CLASS_INBOX, fetchLimit, fetchSinceDays);
+      return await syncOne(client, store, acc, acc.mailbox, CLASS_INBOX, fetchLimit, fetchSinceDays, prefill);
     }
     const folders = foldersFromBoxes(await client.list(), acc);
     let total = 0;
     for (const f of folders) {
-      total += await syncOne(client, store, acc, f.name, f.class, fetchLimit, fetchSinceDays);
+      total += await syncOne(client, store, acc, f.name, f.class, fetchLimit, fetchSinceDays, prefill);
     }
     return total;
   } catch (e) {
@@ -429,6 +473,39 @@ export async function fetchBody(acc: Account, imapName: string, uid: number): Pr
   if (!msg || !msg.source) return { text: "", html: "" };
   const p = await simpleParser(msg.source);
   return { text: p.text ?? "", html: typeof p.html === "string" ? p.html : "" };
+}
+
+/** fetchBodies bulk-fetches text+html for many UIDs of ONE folder in a single
+ * SELECT + chunked UID FETCH — far fewer round-trips than fetchBody per message,
+ * and resilient to per-message parse failures (those UIDs are simply omitted, so
+ * the caller can retry them). onEach(done) fires after each message is parsed.
+ * Returns a uid -> {text,html} map for the UIDs that came back. */
+export async function fetchBodies(
+  acc: Account,
+  imapName: string,
+  uids: number[],
+  onEach?: (done: number) => void,
+): Promise<Map<number, { text: string; html: string }>> {
+  const out = new Map<number, { text: string; html: string }>();
+  if (!uids.length) return out;
+  const client = await getClient(acc);
+  await client.mailboxOpen(imapName, { readOnly: true });
+  let done = 0;
+  for (let i = 0; i < uids.length; i += FETCH_CHUNK) {
+    const chunk = uids.slice(i, i + FETCH_CHUNK);
+    for await (const msg of client.fetch(chunk, { uid: true, source: true }, { uid: true })) {
+      done++;
+      onEach?.(done);
+      if (!(msg as any).source) continue;
+      try {
+        const p = await simpleParser((msg as any).source);
+        out.set(msg.uid, { text: p.text ?? "", html: typeof p.html === "string" ? p.html : "" });
+      } catch {
+        /* unparseable — omit so the caller retries or leaves it metadata-only */
+      }
+    }
+  }
+  return out;
 }
 
 /** fetchAttachment re-fetches one message's named attachment on demand. */

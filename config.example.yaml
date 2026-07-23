@@ -2,8 +2,11 @@
 # Dev: copy to ./config.yaml at the repo root.
 # Installed: copy to ~/Documents/mox/config.yaml.
 
-# On a cold mailbox, how many recent messages to pull per account. Ignored when
-# fetch_since_days is set.
+# On a cold mailbox, how many recent messages to pull per account WITH FULL
+# CONTENT (body + HTML + attachment metadata). This is all a normal launch pulls.
+# Run `mox --prefill` once to additionally sweep envelope-only metadata over the
+# whole INBOX (searchable offline; bodies fetched on demand or cached for
+# offline_categories). Ignored when fetch_since_days is set.
 fetch_limit: 200
 
 # When > 0, fetch every message received within this many days instead of using
@@ -17,7 +20,7 @@ fetch_limit: 200
 content_days: 90
 
 # Categories kept fully cached offline (bodies never pruned; backfilled by
-# `mox sync` and `cli.ts offline`).
+# `mox --prefill`, `mox sync`, and `cli.ts offline`).
 offline_categories: []
 
 # Categories kept OUT of the INBOX and ALL views (still reachable via their own
