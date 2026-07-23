@@ -22,7 +22,7 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► Ink/React TUI
 | `index.tsx`  | 50  | Entry. Alt-screen wrapper, synchronized-output (DEC 2026) frame wrapping, force-clear hook. |
 | `app.tsx`    | 614 | The whole TUI: sidebar, list, reading pane, keybindings, mouse, pickers, search input.      |
 | `db.ts`      | 324 | SQLite store. Schema, migrations, search query builder, all reads/writes.                   |
-| `mail.ts`    | 306 | IMAP layer. Connection pool, UID-incremental sync, folder detection, attachment fetch.      |
+| `mail.ts`    | 306 | IMAP layer. Connection pool, UID-incremental sync, folder detection, BODYSTRUCTURE attachment metadata, attachment fetch. |
 | `config.ts`  | 128 | `config.yaml` parsing, sender-rule matching, rule persistence.                              |
 | `backend.ts` | 102 | Action layer the TUI calls (sync/mark/move/rule).                                           |
 | `text.ts`    | 88  | Width-safe text fitting (string-width), emoji presentation normalization.                   |
@@ -50,7 +50,7 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► Ink/React TUI
 
 ### 3. Categorization (rule-based only — **AI NOT wired**)
 
-- **Manual sender rules** in `config.yaml`: match by domain (subdomains included) or exact address. Deterministic, run on every sync.
+- **Manual sender rules** in `config.yaml`: match by domain (subdomains included) or exact address. Deterministic. New mail is filed on every fetch/`r`; re-file existing mail after editing rules with `mox --reclassify`.
 - 12 categories defined with AI-intent descriptions (Alerts, GitHub, Work, Finance, Bills, Shopping, Travel, Social, Newsletters, Notifications, Personal, Other).
 - Rule match → sets category with source `rule`. No match → `Uncategorized`.
 - **In-app rule creation (`A`):** pick messages → choose category → derives sender domains → writes rule to `config.yaml` (comment-preserving) → re-homes matching INBOX mail.
@@ -71,6 +71,7 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 ### 5. TUI (Ink/React)
 
 - **3-pane layout:** sidebar (All / Mailboxes / Manual / Other / Folders with live counts) · message list · reading pane.
+- **Message list:** per-row flags (select · done · unread) + a 📎 column marking messages that carry attachments (metadata from `BODYSTRUCTURE`, no downloads).
 - **Reading pane:** header (from/subject/date/category/attachments) + body. **HTML auto-rendered via `lynx`** to flowing text, cached per email+width. Plain-text fallback.
 - **Multi-select** (space) for bulk move/mark/rule.
 - **Windowed scrolling** in list, sidebar, and picker (handles long URL lists).
@@ -90,7 +91,7 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 
 ### 8. Headless CLI (`cli.ts`)
 
-- `sync` — full fetch across all folders + rule-file. For large backfills without blocking the UI.
+- `sync` — full fetch across all folders + rule-file new mail. For large backfills without blocking the UI.
 - `attach <id> [name]` — re-fetch + download an attachment to cwd.
 
 ---

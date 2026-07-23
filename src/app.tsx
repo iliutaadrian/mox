@@ -1,7 +1,8 @@
 // mox TUI (OpenTUI/Solid). Sidebar (INBOX / Mailboxes / Filters / Other /
 // Folders) + message list + reading view, all reading/writing the local SQLite
-// store in-process. Mail is filed deterministically by config rules; server
-// writes are limited to mark-read, archive, trash and their inverses.
+// store in-process. New mail is filed deterministically by config rules on
+// fetch/`r` (re-file existing mail after a rule change with `mox --reclassify`);
+// server writes are limited to mark-read, archive, trash and their inverses.
 //
 // Why Solid + OpenTUI (not React + Ink): OpenTUI keeps a persistent scene graph
 // and repaints only the cells that change; Solid's fine-grained reactivity means
@@ -455,7 +456,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       } else if (ch === "l" || name === "right") scrollList(1, true); // next email
       else if (ch === "h" || name === "left") scrollList(-1, true); // previous email
       else if (ch === "v") openInBrowser();
-      else if (ch === "D") {
+      else if (ch === "s") {
         if (c) void doBackend("Downloading attachments", () => be.download(c.id));
       } else if (ch === "e") {
         setScroll(0);
@@ -536,7 +537,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       });
     else if (ch === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
     else if (ch === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
-    else if (ch === "D" && current()) void doBackend("Downloading attachments", () => be.download(current()!.id));
+    else if (ch === "s" && current()) void doBackend("Downloading attachments", () => be.download(current()!.id));
     else if (ch === "e" && targets().length > 0) markDone(targets(), true, `done ${targets().length}`);
     else if (ch === "a" && targets().length > 0) void doBackend("Archiving on server", () => be.archive(targets()));
     else if (ch === "d" && targets().length > 0) void doBackend("Trashing on server", () => be.trash(targets()));
@@ -557,8 +558,9 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const senderW = 18;
   const catW = createMemo(() => (listW() < 72 ? 0 : 13));
   const dateW = 17; // "Jul 20 2024 15:04" (year shown only for non-current-year)
+  // Leading cluster is sel+done+read (3) + the 2-cell attachment column + a space.
   const subjW = createMemo(() =>
-    Math.max(0, listW() - (3 + 1 + senderW + 1 + (catW() > 0 ? catW() + 1 : 0) + dateW + 1)),
+    Math.max(0, listW() - (3 + 2 + 1 + senderW + 1 + (catW() > 0 ? catW() + 1 : 0) + dateW + 1)),
   );
 
   const visible = createMemo(() => {
@@ -606,7 +608,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   });
   const hint = createMemo(() =>
     mode() === "reading"
-      ? `j/k scroll · h/l prev/next · v html${hasAtts() ? " · D save" : ""} · ${actionHint()} · M/U read · esc/q back`
+      ? `j/k scroll · h/l prev/next · v html${hasAtts() ? " · s save" : ""} · ${actionHint()} · M/U read · esc/q back`
       : `enter open · ${actionHint()} · m move · g goto · n/p unread · / search · r refresh · q quit${selected().size > 0 ? ` · ${selected().size} selected` : ""}`,
   );
 
@@ -699,6 +701,9 @@ export function App(props: { dbPath: string; cfgPath: string }) {
                     const selCh = () => (selected().has(m.id) ? "●" : " ");
                     const doneCh = m.done ? "✓" : " ";
                     const readCh = m.seen ? " " : "•";
+                    // Fixed 2-cell attachment column: the clip (width 2) or two
+                    // spaces, so rows stay aligned whether or not there's a file.
+                    const clip = m.has_att ? oneLine("📎") : "  ";
                     const sender = fit(oneLine(m.from_name || m.from_addr), senderW);
                     const d = new Date(m.date * 1000);
                     const dm = d.toLocaleDateString("en-US", { month: "short", day: "2-digit" });
@@ -720,7 +725,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
                         fallback={
                           <text bg={PINK} fg={BLACK} onMouseDown={onDown}>
                             {fit(
-                              `${selCh()}${doneCh}${readCh} ${sender} ${cat()}${catW() > 0 ? " " : ""}${subj()} ${date}`,
+                              `${selCh()}${doneCh}${readCh}${clip} ${sender} ${cat()}${catW() > 0 ? " " : ""}${subj()} ${date}`,
                               listW(),
                             )}
                           </text>
@@ -732,7 +737,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
                         <text attributes={m.seen ? undefined : TextAttributes.BOLD} onMouseDown={onDown}>
                           <Seg fg={PINK} text={selCh()} />
                           <Seg fg={DONE} text={doneCh} />
-                          <Seg text={`${readCh} ${sender} `} />
+                          <Seg text={`${readCh}${clip} ${sender} `} />
                           <Show when={catW() > 0}>
                             <Seg fg={CAT} text={`${cat()} `} />
                           </Show>

@@ -30,6 +30,7 @@ export type MessageRow = {
   done: number;
   category: string;
   suggested_new: string;
+  has_att: number; // 1 if the message carries attachment metadata
 };
 
 export type MessageFull = MessageRow & {
@@ -141,7 +142,8 @@ export function buildSearch(query: string): { where: string; params: any[] } | n
 const LIST_COLS = `id, account, mailbox, COALESCE(from_name,'') AS from_name,
   COALESCE(from_addr,'') AS from_addr, COALESCE(subject,'') AS subject,
   date, seen, done, COALESCE(category,'') AS category,
-  COALESCE(suggested_new,'') AS suggested_new`;
+  COALESCE(suggested_new,'') AS suggested_new,
+  CASE WHEN attachments IS NOT NULL AND attachments NOT IN ('', '[]') THEN 1 ELSE 0 END AS has_att`;
 
 // Inbox visibility: hide locally-done mail. Applied to every "inbox" read
 // (list + sidebar counts) so done mail drops out of the active views.
@@ -154,6 +156,10 @@ export class Store {
     this.db = new Database(path, { create: true });
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA busy_timeout = 5000");
+    // NORMAL is durable under WAL (only risks losing the last commit on an OS
+    // crash, never corruption) and drops the per-commit fsync — a large win for
+    // the prefill sweep's bulk inserts.
+    this.db.exec("PRAGMA synchronous = NORMAL");
     this.migrate();
   }
 
@@ -301,6 +307,40 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     ).all(...params, limit) as any;
   }
 
+  /** Stats for `mox --stats`, scoped to DOWNLOADED mail (a cached body or html —
+   * what you can actually read offline), not metadata-only rows. Returns the
+   * download totals plus breakdowns by category, account+mailbox and sender. */
+  downloadStats(senderLimit = 15): {
+    total: number;
+    downloaded: number;
+    withHtml: number;
+    byCategory: { key: string; n: number }[];
+    byMailbox: { key: string; n: number }[];
+    bySender: { key: string; n: number }[];
+  } {
+    // A single reusable predicate: the row carries readable content.
+    const DL = "(COALESCE(body,'')!='' OR COALESCE(html,'')!='')";
+    const g = this.db.query(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN ${DL} THEN 1 ELSE 0 END) AS downloaded,
+              SUM(CASE WHEN COALESCE(html,'')!='' THEN 1 ELSE 0 END) AS withHtml
+       FROM messages`,
+    ).get() as { total: number; downloaded: number; withHtml: number };
+    const byCategory = this.db.query(
+      `SELECT COALESCE(NULLIF(category,''),'Uncategorized') AS key, COUNT(*) AS n
+       FROM messages WHERE ${DL} GROUP BY key ORDER BY n DESC`,
+    ).all() as { key: string; n: number }[];
+    const byMailbox = this.db.query(
+      `SELECT account || ' / ' || mailbox AS key, COUNT(*) AS n
+       FROM messages WHERE ${DL} GROUP BY key ORDER BY n DESC`,
+    ).all() as { key: string; n: number }[];
+    const bySender = this.db.query(
+      `SELECT COALESCE(NULLIF(from_name,''), from_addr) AS key, COUNT(*) AS n
+       FROM messages WHERE ${DL} GROUP BY lower(from_addr) ORDER BY n DESC LIMIT ?`,
+    ).all(senderLimit) as { key: string; n: number }[];
+    return { total: g.total, downloaded: g.downloaded, withHtml: g.withHtml, byCategory, byMailbox, bySender };
+  }
+
   folderCounts(): Map<string, number> {
     const rows = this.db.query(
       `SELECT mailbox, COUNT(*) AS n FROM messages WHERE mailbox IN ('Sent','Spam','Archive','Trash') GROUP BY mailbox`,
@@ -314,16 +354,37 @@ CREATE TABLE IF NOT EXISTS approved_categories (
 
   // ---- writes / sync (engine + mail) ----
 
+  // Always serialize attachments — '[]' means "checked, none found", distinct
+  // from '' / NULL on rows synced before attachment capture existed. Both read
+  // as "no attachments" for the list 📎 flag.
+  private static readonly INSERT_SQL =
+    `INSERT INTO messages(account,mailbox,uid,message_id,from_addr,from_name,subject,date,snippet,body,html,attachments,seen)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(account,mailbox,uid) DO NOTHING`;
+
+  private static insertArgs(m: NewMessage) {
+    return [m.account, m.mailbox, m.uid, m.messageId, m.fromAddr, m.fromName, m.subject, m.date, m.snippet, m.body, m.html, JSON.stringify(m.attachments), m.seen ? 1 : 0] as const;
+  }
+
   /** Insert a fetched message; existing (account,mailbox,uid) left untouched.
    * Returns true if a new row was inserted. */
   insertMessage(m: NewMessage): boolean {
-    const atts = m.attachments.length ? JSON.stringify(m.attachments) : "";
-    const res = this.db.query(
-      `INSERT INTO messages(account,mailbox,uid,message_id,from_addr,from_name,subject,date,snippet,body,html,attachments,seen)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-       ON CONFLICT(account,mailbox,uid) DO NOTHING`,
-    ).run(m.account, m.mailbox, m.uid, m.messageId, m.fromAddr, m.fromName, m.subject, m.date, m.snippet, m.body, m.html, atts, m.seen ? 1 : 0);
+    const res = this.db.query(Store.INSERT_SQL).run(...Store.insertArgs(m));
     return res.changes > 0;
+  }
+
+  /** Insert many messages in a single transaction (one commit, not one per
+   * row) — the bulk path for cold backfill and the prefill metadata sweep.
+   * Returns how many new rows were actually inserted (dedup via ON CONFLICT). */
+  insertMany(msgs: NewMessage[]): number {
+    if (msgs.length === 0) return 0;
+    const stmt = this.db.query(Store.INSERT_SQL);
+    const tx = this.db.transaction((rows: NewMessage[]) => {
+      let n = 0;
+      for (const m of rows) n += stmt.run(...Store.insertArgs(m)).changes;
+      return n;
+    });
+    return tx(msgs) as number;
   }
 
   syncState(account: string, mailbox: string): { uidValidity: number; lastUid: number } {
@@ -354,15 +415,37 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     return new Set(rows.map((r) => r.uid));
   }
 
-  /** INBOX messages with no category yet (folders keep null category). */
+  /** INBOX messages with no category yet (folders keep null category) — the
+   * targets auto-filed on fetch/`r` by classifyByRules. */
   unclassified(limit: number): { id: number; from_addr: string; from_name: string; subject: string; attachments: string }[] {
     return this.db.query(
       "SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(from_name,'') AS from_name, COALESCE(subject,'') AS subject, COALESCE(attachments,'') AS attachments FROM messages WHERE category IS NULL AND mailbox='INBOX' ORDER BY date DESC LIMIT ?",
     ).all(limit) as { id: number; from_addr: string; from_name: string; subject: string; attachments: string }[];
   }
 
+  /** Every INBOX message eligible for rule re-filing: all but manually-moved
+   * mail (source='manual' is a user override rules must not clobber). Carries
+   * the current category so `mox --reclassify` can skip unchanged rows. */
+  reclassifiable(): { id: number; from_addr: string; from_name: string; subject: string; category: string | null; source: string | null }[] {
+    return this.db.query(
+      "SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(from_name,'') AS from_name, COALESCE(subject,'') AS subject, category, source FROM messages WHERE mailbox='INBOX' AND (source IS NULL OR source != 'manual')",
+    ).all() as { id: number; from_addr: string; from_name: string; subject: string; category: string | null; source: string | null }[];
+  }
+
   setClassification(id: number, category: string, source: string) {
     this.db.query("UPDATE messages SET category=?, source=?, classified_at=? WHERE id=?").run(category, source, Math.floor(Date.now() / 1000), id);
+  }
+
+  /** Apply many rule-filings in a single transaction (one commit, not one per
+   * row) — the bulk path for classifyByRules over a fresh prefill. */
+  setClassificationMany(rows: { id: number; category: string; source: string }[]) {
+    if (rows.length === 0) return;
+    const now = Math.floor(Date.now() / 1000);
+    const stmt = this.db.query("UPDATE messages SET category=?, source=?, classified_at=? WHERE id=?");
+    const tx = this.db.transaction((rs: { id: number; category: string; source: string }[]) => {
+      for (const r of rs) stmt.run(r.category, r.source, now, r.id);
+    });
+    tx(rows);
   }
 
   setCategoryManual(ids: number[], category: string) {
@@ -412,9 +495,11 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     return this.db.query(q).all(...cats) as any;
   }
 
-  /** Store a fetched body/html for one message (offline backfill / on-demand). */
-  setContent(id: number, body: string, html: string) {
-    this.db.query("UPDATE messages SET body=?, html=? WHERE id=?").run(body, html, id);
+  /** Store a fetched body/html (+ attachment metadata) for one message (offline
+   * backfill / on-demand). atts is always serialized so '[]' records "checked,
+   * none" rather than leaving the column unscanned. */
+  setContent(id: number, body: string, html: string, atts: Attachment[] = []) {
+    this.db.query("UPDATE messages SET body=?, html=?, attachments=? WHERE id=?").run(body, html, JSON.stringify(atts), id);
   }
 
   /** Follow a message that moved folders on the server: relabel its mailbox and
