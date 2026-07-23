@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-23
+
+### Added
+- `mox --prefill`: one-time headless bulk seed. Sweeps envelope-only metadata
+  over the entire INBOX (whole inbox searchable offline; bodies fetched on
+  demand), and caches full bodies for the `offline_categories`. A normal launch
+  still pulls only the recent `fetch_limit` with full content.
+- Reading pane now shows the recipient (`To:`) address — the account's own
+  address that received the message.
+
+### Changed
+- Offline-category backfill now bulk-fetches bodies per account (chunked UID
+  FETCH) with a two-pass retry, instead of one fragile request per message.
+
 ## [1.0.0] - 2026-07-23
 
 First public release.
@@ -26,5 +40,6 @@ First public release.
 - Prebuilt macOS binary (Apple Silicon) and a `curl | bash` installer;
   single-folder data directory at `~/Documents/mox`.
 
-[Unreleased]: https://github.com/iliutaadrian/mox/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/iliutaadrian/mox/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/iliutaadrian/mox/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/iliutaadrian/mox/releases/tag/v1.0.0
