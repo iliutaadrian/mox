@@ -27,19 +27,27 @@ jobs:
           cd dist
           shasum -a 256 mox-darwin-arm64 > checksums.txt
           cat checksums.txt
+
+      # Build the release body from CHANGELOG.md (the single source of truth):
+      # the section for this tag's version, then the static install footer.
+      # generate_release_notes appends GitHub's "Full Changelog" compare link.
+      - name: Release notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Print the lines between "## [VERSION]" and the next "## [" header,
+          # dropping both boundary lines — i.e. just this version's entries.
+          awk -v v="## [$VERSION]" '
+            index($0, v) == 1 { grab = 1; next }
+            /^## \[/ && grab { exit }
+            grab { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          cat .github/release-footer.md >> /tmp/release-notes.md
+          echo "----- release notes -----"; cat /tmp/release-notes.md
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/mox-darwin-arm64
             dist/checksums.txt
           generate_release_notes: true
-          body: |
-            ## Install (Apple Silicon)
-
-            ```bash
-            curl -fsSL https://raw.githubusercontent.com/iliutaadrian/mox/main/install.sh | bash
-            ```
-
-            Or download `mox-darwin-arm64` below, `chmod +x`, and move it onto your `PATH`.
-
-            > Intel Macs: no prebuilt binary yet — [run from source](https://github.com/iliutaadrian/mox#run-from-source-dev).
+          body_path: /tmp/release-notes.md
