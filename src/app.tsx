@@ -832,6 +832,7 @@ function Reading(props: {
     const o = props.opened;
     const atts: { name: string; type: string; size: number }[] = o.attachments ? JSON.parse(o.attachments) : [];
     const head = [
+      `Id:      ${o.id}`,
       `Mailbox: ${o.account}`,
       `From:    ${o.from_name} <${o.from_addr}>`,
       ...(props.toAddr ? [`To:      ${props.toAddr}`] : []),
