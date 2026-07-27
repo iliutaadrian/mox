@@ -133,6 +133,7 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | `a` / `d` | **Archive** / **Trash** on the server |
 | `u` | **Restore** — undone / unarchive / untrash |
 | `m` | Move the selection to a category |
+| `y` | **Copy** — then `i` id, `f` sender address, `s` subject, `a` row (works on the whole multi-selection) |
 | `g` | **Goto** — jump to any view |
 | `M` / `U` | Mark read / unread **on the server** |
 | `n` / `p` | Next / previous unread |
@@ -148,6 +149,8 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | `h` / `l` | Previous / next email |
 | `v` | Open the full HTML email in the browser |
 | `o` | Open a link: filterable picker over the `[N]` references in the body |
+| `y` | **Copy mode** — `h`/`j`/`k`/`l` move a character cursor (`0`/`$` line ends, `g`/`G` email ends), `y` copies the cursor's line, `v` starts a selection that `y` then copies; or `i` id, `f` sender, `s` subject, `a` the whole email |
+| drag | Select text with the mouse — releasing copies the selection |
 | `s` | Download attachments to `./Attachments` (subfolder if multiple) |
 | `e`/`a`/`d` | Done / archive / trash |
 | `u` | Restore (in Trash / Archive / done) |

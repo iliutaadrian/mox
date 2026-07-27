@@ -16,6 +16,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from the provider's own UI.
 - `Store.full()` now exposes the message's `message_id` (used for reply threading).
 
+### Added (copy mode)
+- Copy mode (`y`) with a real system-clipboard write (`pbcopy`, or
+  `wl-copy`/`xclip`/`xsel` elsewhere). In the reader it puts a character cursor
+  on the pane: `h`/`j`/`k`/`l` move it, `0`/`$` and `g`/`G` jump to the ends;
+  `y` copies the cursor's line, and `v` starts a selection that `y` then copies
+  (character-precise, across lines).
+- Mouse drag selects text in the reader and copies it on release — no mode to
+  enter. Selections are rendered by OpenTUI itself, so the highlight is exactly
+  what lands on the clipboard; trailing pane padding is stripped.
+- One-key field copies work from both the list and the reader: `i` id, `f`
+  sender address, `s` subject, `a` the whole email (or one tab-separated row per
+  message from the list). These act on the multi-selection, so `space`-marking
+  rows then `yi` yields every id, one per line.
+
 ### Added (numbered links)
 - Reader link picker (`o`): email bodies render with lynx's `[N]` link
   references inline (no more raw URL dump at the bottom), and `o` opens a

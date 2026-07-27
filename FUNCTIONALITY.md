@@ -75,7 +75,7 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 - **Reading pane:** header (from/subject/date/category/attachments) + body. **HTML auto-rendered via `lynx`** to flowing text, cached per email+width. Plain-text fallback.
 - **Multi-select** (space) for bulk move/mark/rule.
 - **Windowed scrolling** in list, sidebar, and picker (handles long URL lists).
-- **Mouse:** wheel scroll, click-to-select, click-current-row-to-open (`mouse.ts`, SGR tracking).
+- **Mouse:** wheel scroll, click-to-select, click-current-row-to-open, and drag-to-select text in the reader (releasing copies it).
 - **Width-safe rendering** (`text.ts`): measures with the same `string-width` Ink uses, forces emoji presentation (VS16) — prevents row-wrap corruption during rapid scroll.
 - **Anti-flicker:** synchronized-output (DEC 2026) frames + no key-move throttle.
 
@@ -112,7 +112,9 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 | `A`               | create sender rule          | —                |
 | `M`/`U`           | mark read/unread            | mark read/unread |
 | `v`               | open HTML in browser        | HTML in browser  |
-| `u`               | URL picker                  | URL picker       |
+| `o`               | —                           | numbered-link picker |
+| `y`               | copy field (i/f/s/a)        | copy mode (char cursor, v select, y line, i/f/s/a) |
+| `u`               | restore (undone/unarchive/untrash) | restore   |
 | `q`               | quit                        | back to list     |
 
 ---
