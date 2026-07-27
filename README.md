@@ -47,7 +47,7 @@ Three honest reasons:
 | 🔀 **Type-to-filter move** | `m` opens a fuzzy picker over every category — type a few letters, `enter`, done. Same picker powers `g` **goto** for jumping between views. |
 | 🔎 **Live search** | `/` filters the current view as you type, with operators (`from:`, `subject:`, `is:unread`). `n`/`p` jump between unread. |
 | 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — saved under `./Attachments` (single file, or a per-email subfolder). |
-| 🤖 **MCP for Claude** | An MCP server exposes `search` / `get` / `list` / `stats` over your mail, so Claude Code can sort the leftovers or answer "what did the bank send last week?" — plus `create_draft`, which files a composed reply into your Drafts folder for you to review and send. |
+| 🤖 **MCP for Claude** | An MCP server exposes `search_emails` / `get_email` over your mail, so Claude Code can sort the leftovers or answer "what did the bank send last week?" — plus `create_draft`, which files a composed reply into your Drafts folder for you to review and send. |
 
 <div align="center">
 <img src="docs/move.png" width="380" alt="Move picker: type-to-filter list of categories, Finance highlighted"> <img src="docs/goto.png" width="380" alt="Goto picker: full list of views with counts to jump to">
@@ -215,7 +215,7 @@ curl -fsSL https://raw.githubusercontent.com/iliutaadrian/mox/main/install.sh | 
 
 ## Claude / MCP
 
-mox ships an MCP server (`search` / `get` / `list` / `stats` / `create_draft`) so Claude Code can query your mail as first-class tools — and draft replies for you. Register it once:
+mox ships an MCP server (`search_emails` / `get_email` / `create_draft`) so Claude Code can query your mail as first-class tools — and draft replies for you. Register it once:
 
 ```bash
 claude mcp add mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts

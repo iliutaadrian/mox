@@ -50,6 +50,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tidyCopy()` moved into `src/text.ts` so the copy-padding rule is unit-tested;
   it now also preserves a selection that is entirely whitespace.
 
+### Removed
+- MCP `list_emails` and `email_stats` tools; `search_emails` covers both
+  (`in:` and category filters) and the surface stays smaller.
+
 ### Changed
 - Keybindings: **trash moved from `d` to `t`** and **restore from `u` to `z`**,
   freeing `d`/`u` for half-page down/up in both the list and the reader. The

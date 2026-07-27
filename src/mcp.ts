@@ -54,51 +54,6 @@ server.registerTool(
 );
 
 server.registerTool(
-  "list_emails",
-  {
-    title: "List emails",
-    description: "List messages in a category, folder (Sent/Spam/Archive/Trash), or account. Newest first.",
-    inputSchema: {
-      category: z.string().optional(),
-      folder: z.enum(["Sent", "Spam", "Archive", "Trash"]).optional(),
-      account: z.string().optional(),
-      limit: z.number().int().max(500).default(50),
-    },
-  },
-  async ({ category, folder, account, limit }) => {
-    const f = category
-      ? { kind: "category" as const, name: category }
-      : folder
-        ? { kind: "folder" as const, class: folder }
-        : account
-          ? { kind: "account" as const, name: account, exclude: [] }
-          : { kind: "all" as const, exclude: [] };
-    return { content: [{ type: "text", text: JSON.stringify(store.list(f, limit), null, 2) }] };
-  },
-);
-
-server.registerTool(
-  "email_stats",
-  {
-    title: "Email stats",
-    description:
-      "Grouped counts (with unread + first/last date). dim = year | month | sender | category. " +
-      "Optional filters: category, account, mailbox (INBOX/Sent/Spam/Archive/Trash).",
-    inputSchema: {
-      dim: z.enum(["year", "month", "sender", "category"]),
-      category: z.string().optional(),
-      account: z.string().optional(),
-      mailbox: z.string().optional(),
-      limit: z.number().int().max(500).default(100),
-    },
-  },
-  async ({ dim, category, account, mailbox, limit }) => {
-    const rows = store.stats(dim, { category, account, mailbox }, limit);
-    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
-  },
-);
-
-server.registerTool(
   "create_draft",
   {
     title: "Create a draft",
