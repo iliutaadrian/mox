@@ -16,6 +16,12 @@ import type { Fixture } from "./fixture.ts";
 export type Harness = Awaited<ReturnType<typeof testRender>> & {
   /** The visible screen as text. */
   frame: () => string;
+  /** Every frame painted since start, newest last. */
+  history: () => string[];
+  /** Did ANY painted frame contain this text? Use for transient status lines:
+   * a message like "Trashing on server…" is replaced as soon as the action
+   * finishes, so asserting on the current frame alone silently misses it. */
+  everSaw: (needle: string) => boolean;
   /** Type characters one at a time, letting the app repaint between them. */
   type: (keys: string) => Promise<void>;
   /** Press a named key (see KeyCodes) or a single character. */
@@ -44,15 +50,22 @@ export async function startApp(fx: Fixture, size?: { width?: number; height?: nu
   });
   await t.waitForVisualIdle();
 
+  const seen: string[] = [t.captureCharFrame()];
   const settle = async () => {
     // The app repaints on its own after async work (body fetch, backend calls),
     // so give the renderer a chance to reach a steady state after every input.
+    // Both the immediate paint AND the settled one are recorded: transient
+    // status lines only exist in the first.
     await t.flush();
+    seen.push(t.captureCharFrame());
     await t.waitForVisualIdle({ quietFrames: 2, maxFrames: 40 }).catch(() => {});
+    seen.push(t.captureCharFrame());
   };
 
   const harness: Harness = Object.assign(t, {
     frame: () => t.captureCharFrame(),
+    history: () => [...seen],
+    everSaw: (needle: string) => seen.some((f) => f.includes(needle)),
     type: async (keys: string) => {
       for (const ch of keys) {
         t.mockInput.pressKey(ch);

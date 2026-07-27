@@ -191,9 +191,15 @@ describe("list navigation", () => {
   test("regression: d does not trash (trash moved to t)", async () => {
     await app.type("l");
     await app.type("d");
-    // Nothing was moved on the server, and the message is still listed.
+    // A trash ATTEMPT is what has to be caught, not its result: against the
+    // fixture's dead host the call fails and moves nothing, so the DB looks
+    // identical either way. The "Trashing on server…" label is not reliable
+    // either — the IMAP failure is fast enough that both status updates land
+    // before the next paint, so that frame never exists. What DOES survive is
+    // the failure itself: `d` must never put the app into a server error.
+    expect(app.everSaw("error:")).toBe(false);
+    expect(app.everSaw("Trashing on server")).toBe(false);
     expect(app.frame()).toContain("Quarterly update");
-    expect(app.frame()).not.toContain("Trashing on server");
     const store = new Store(fx.dbPath);
     const inbox = store.list({ kind: "inbox", exclude: [] }, 100);
     store.close();
