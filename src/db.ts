@@ -35,6 +35,7 @@ export type MessageRow = {
 
 export type MessageFull = MessageRow & {
   uid: number;
+  message_id: string;
   body: string;
   html: string;
   attachments: string; // JSON array
@@ -244,7 +245,8 @@ CREATE TABLE IF NOT EXISTS approved_categories (
 
   full(id: number): MessageFull | null {
     return this.db.query(
-      `SELECT ${LIST_COLS}, uid, COALESCE(body,'') AS body, COALESCE(html,'') AS html,
+      `SELECT ${LIST_COLS}, uid, COALESCE(message_id,'') AS message_id,
+       COALESCE(body,'') AS body, COALESCE(html,'') AS html,
        COALESCE(attachments,'') AS attachments, COALESCE(source,'') AS source
        FROM messages WHERE id=?`,
     ).get(id) as MessageFull | null;

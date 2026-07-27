@@ -1,6 +1,6 @@
 // IMAP layer (imapflow + mailparser). Ported from the former Go internal/mail.
-// Strictly read-only except setSeen (the one operation that writes \Seen to the
-// server). Sync is UID-incremental. Ported behaviors: RFC 2971 ID (Yahoo drops
+// Strictly read-only except setSeen (writes \Seen) and appendDraft (appends a
+// composed draft to the Drafts folder — mox never sends). Sync is UID-incremental. Ported behaviors: RFC 2971 ID (Yahoo drops
 // the connection otherwise), UIDVALIDITY reset, date-windowed vs count-based
 // backfill, special-use folder detection, attachment metadata only.
 import { ImapFlow } from "imapflow";
@@ -497,6 +497,27 @@ export async function setSeen(acc: Account, imapName: string, uids: number[], se
     await client.mailboxOpen(imapName, { readOnly: false });
     if (seen) await client.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
     else await client.messageFlagsRemove(uids, ["\\Seen"], { uid: true });
+  } finally {
+    await client.logout();
+  }
+}
+
+/** appendDraft appends a composed RFC822 message to the account's Drafts
+ * folder with the \Draft flag, so it shows up as an editable draft in the
+ * provider's own UI (webmail / app) ready to review and send. mox has no SMTP —
+ * this is the whole "compose" story. Returns the folder used and the new UID
+ * (0 when the server doesn't report UIDPLUS APPENDUID). */
+export async function appendDraft(acc: Account, raw: string): Promise<{ folder: string; uid: number }> {
+  const client = connect(acc);
+  await client.connect();
+  try {
+    const boxes = await client.list();
+    const drafts =
+      (boxes.find((b: any) => b.specialUse === "\\Drafts")?.path as string | undefined) ??
+      (boxes.find((b: any) => /draft/i.test(b.path))?.path as string | undefined);
+    if (!drafts) throw new Error("no Drafts folder found");
+    const res = await client.append(drafts, raw, ["\\Draft"]);
+    return { folder: drafts, uid: res && typeof res === "object" ? Number(res.uid ?? 0) : 0 };
   } finally {
     await client.logout();
   }

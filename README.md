@@ -47,7 +47,7 @@ Three honest reasons:
 | 🔀 **Type-to-filter move** | `m` opens a fuzzy picker over every category — type a few letters, `enter`, done. Same picker powers `g` **goto** for jumping between views. |
 | 🔎 **Live search** | `/` filters the current view as you type, with operators (`from:`, `subject:`, `is:unread`). `n`/`p` jump between unread. |
 | 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — single file or a per-email subfolder. |
-| 🤖 **MCP for Claude** | A read-only MCP server exposes `search` / `get` / `list` / `stats` over your mail, so Claude Code can sort the leftovers or answer "what did the bank send last week?" without touching your server. |
+| 🤖 **MCP for Claude** | An MCP server exposes `search` / `get` / `list` / `stats` over your mail, so Claude Code can sort the leftovers or answer "what did the bank send last week?" — plus `create_draft`, which files a composed reply into your Drafts folder for you to review and send. |
 
 <div align="center">
 <img src="docs/move.png" width="380" alt="Move picker: type-to-filter list of categories, Finance highlighted"> <img src="docs/goto.png" width="380" alt="Goto picker: full list of views with counts to jump to">
@@ -169,6 +169,25 @@ mox --reclassify                    # re-file the whole inbox against the curren
 mox --stats                         # print a snapshot of downloaded/offline mail
 bun src/cli.ts sync                 # fetch ALL folders + rule-file, then exit
 bun src/cli.ts attach <id> [name]   # download an attachment on demand
+bun src/cli.ts draft --reply-to <id> --body-file letter.txt
+                                    # compose a draft into the account's IMAP
+                                    #   Drafts folder (reply or standalone)
+```
+
+### Drafts (compose without sending)
+
+mox has **no SMTP on purpose**: `draft` composes a nicely formatted message (plain text + generated HTML, UTF-8 safe) and appends it to the account's **IMAP Drafts folder**. You review and hit Send from your provider's own UI (webmail / phone app), so nothing ever leaves the machine unseen.
+
+```bash
+# reply to a stored message — account, To and "Re: …" subject are derived,
+# In-Reply-To/References thread it under the original
+bun src/cli.ts draft --reply-to 31606 --body-file letter.txt
+
+# standalone
+bun src/cli.ts draft --account Personal --to who@example.com \
+  --subject "Hello" --body "First paragraph.
+
+Second paragraph."
 ```
 
 A normal launch only pulls the most recent `fetch_limit` messages with full content. `mox --prefill` additionally sweeps **envelope-only metadata** over every older INBOX message (so the whole inbox is searchable offline; bodies fetch on demand when opened), and caches full bodies for the `offline_categories`.
@@ -189,13 +208,13 @@ curl -fsSL https://raw.githubusercontent.com/iliutaadrian/mox/main/install.sh | 
 
 ## Claude / MCP
 
-mox ships a **read-only** MCP server (`search` / `get` / `list` / `stats`) so Claude Code can query your mail as first-class tools. Register it once:
+mox ships an MCP server (`search` / `get` / `list` / `stats` / `create_draft`) so Claude Code can query your mail as first-class tools — and draft replies for you. Register it once:
 
 ```bash
 claude mcp add mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
 ```
 
-It reads the same config/DB as the TUI and never writes to your mailbox.
+It reads the same config/DB as the TUI. The only mailbox write is `create_draft`, which appends to the Drafts folder — mox never sends; you review and send from your own mail UI.
 
 ---
 
@@ -218,10 +237,11 @@ IMAP ──▶ local SQLite (body + html + local category/done columns)
 | `src/db.ts` | `bun:sqlite` store; category/done are local-only columns |
 | `src/mail.ts` | `imapflow` fetch + `mailparser`; pooled connections; server moves |
 | `src/engine.ts` | fetch → rule-file → persist |
-| `src/backend.ts` | in-process actions (sync/mark/move/archive/trash + inverses) |
+| `src/backend.ts` | in-process actions (sync/mark/move/archive/trash + inverses, draft) |
+| `src/compose.ts` | draft MIME builder (plain + HTML multipart, RFC 2047 headers) |
 | `src/app.tsx` | OpenTUI/Solid interface |
-| `src/cli.ts` | headless entry (`sync`, `attach`) |
-| `src/mcp.ts` | read-only MCP server for Claude |
+| `src/cli.ts` | headless entry (`sync`, `attach`, `draft`) |
+| `src/mcp.ts` | MCP server for Claude (queries + `create_draft`) |
 
 Built with [OpenTUI](https://github.com/anomalyco/opentui) + [Solid](https://www.solidjs.com) on [Bun](https://bun.sh).
 

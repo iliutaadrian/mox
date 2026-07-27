@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Draft composing without SMTP: `cli.ts draft` and the MCP `create_draft` tool
+  build a nicely formatted message (plain text + generated HTML, UTF-8-safe
+  headers/body) and append it to the account's IMAP Drafts folder with `\Draft`.
+  Either a threaded reply to a stored message (`--reply-to <id>` derives the
+  account, To and `Re:` subject, and sets In-Reply-To/References) or standalone
+  (`--account/--to/--subject`). mox never sends — drafts are reviewed and sent
+  from the provider's own UI.
+- `Store.full()` now exposes the message's `message_id` (used for reply threading).
+
 ## [1.3.0] - 2026-07-23
 
 ### Added

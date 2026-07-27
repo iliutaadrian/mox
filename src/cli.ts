@@ -4,12 +4,13 @@
 //
 //   bun ink/src/cli.ts sync                 fetch all folders + rule-file
 //   bun ink/src/cli.ts attach <id> [name]   download an attachment to cwd
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 import { Store, CLASS_INBOX } from "./db.ts";
 import { loadConfig } from "./config.ts";
 import { refresh, backfillOffline } from "./engine.ts";
 import { detectFolders, fetchAttachment } from "./mail.ts";
+import { backend } from "./backend.ts";
 import { resolveCfgPath, resolveDbPath } from "./paths.ts";
 
 const cfgPath = resolveCfgPath();
@@ -56,8 +57,32 @@ switch (cmd) {
     console.log(`saved ${out} (${data.length} bytes)`);
     break;
   }
+  case "draft": {
+    // cli.ts draft --reply-to <id> --body-file letter.txt
+    // cli.ts draft --account yahoo --to a@b.c --subject "Hi" --body "text"
+    const flags = new Map<string, string>();
+    for (let i = 0; i < rest.length; i += 2) {
+      if (!rest[i]?.startsWith("--") || rest[i + 1] === undefined) throw new Error(`bad flag ${rest[i]}`);
+      flags.set(rest[i].slice(2), rest[i + 1]);
+    }
+    const bodyFile = flags.get("body-file");
+    const body = bodyFile ? readFileSync(bodyFile, "utf-8") : (flags.get("body") ?? "");
+    const replyTo = flags.get("reply-to");
+    const res = await backend(store, cfg).draft({
+      body,
+      replyTo: replyTo === undefined ? undefined : Number(replyTo),
+      account: flags.get("account"),
+      to: flags.get("to"),
+      subject: flags.get("subject"),
+    });
+    console.log(res.out);
+    if (!res.ok) process.exit(1);
+    break;
+  }
   default:
-    console.error("usage: cli.ts sync | offline | attach <id> [name]");
+    console.error(
+      "usage: cli.ts sync | offline | attach <id> [name] | draft [--reply-to <id>] [--account <name>] [--to <addr>] [--subject <s>] (--body <text> | --body-file <path>)",
+    );
     process.exit(2);
 }
 store.close();

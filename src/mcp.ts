@@ -1,5 +1,6 @@
-// MCP server over the local mox mail store (read-only). Lets Claude query
-// your mail as first-class tools instead of shelling out to sqlite.
+// MCP server over the local mox mail store. Read-only queries, plus
+// create_draft (appends to the account's IMAP Drafts folder — mox never
+// sends; drafts are reviewed and sent from the provider's own UI).
 //
 // Register with Claude Code (once):
 //   claude mcp add mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
@@ -10,11 +11,15 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 import { Store } from "./db.ts";
+import { loadConfig } from "./config.ts";
+import { backend } from "./backend.ts";
 import { resolveCfgPath, resolveDbPath } from "./paths.ts";
 
 const cfgPath = resolveCfgPath();
 const dbPath = resolveDbPath(cfgPath);
 const store = new Store(dbPath);
+const cfg = loadConfig(cfgPath);
+const actions = backend(store, cfg);
 
 const server = new McpServer({ name: "mox", version: "1.0.0" });
 
@@ -90,6 +95,30 @@ server.registerTool(
   async ({ dim, category, account, mailbox, limit }) => {
     const rows = store.stats(dim, { category, account, mailbox }, limit);
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+  },
+);
+
+server.registerTool(
+  "create_draft",
+  {
+    title: "Create a draft",
+    description:
+      "Compose an email and save it to the account's IMAP Drafts folder (nicely formatted, " +
+      "plain + HTML). mox never sends — the user reviews and sends it from their own mail UI. " +
+      "Pass reply_to (a message id from search/list) to draft a threaded reply (to/subject " +
+      "derived from the original, overridable); omit it for a standalone draft, which needs " +
+      "account, to and subject. body is plain text; blank lines separate paragraphs.",
+    inputSchema: {
+      body: z.string(),
+      reply_to: z.number().int().optional(),
+      account: z.string().optional(),
+      to: z.string().optional(),
+      subject: z.string().optional(),
+    },
+  },
+  async ({ body, reply_to, account, to, subject }) => {
+    const res = await actions.draft({ body, replyTo: reply_to, account, to, subject });
+    return { content: [{ type: "text", text: res.out }], isError: !res.ok };
   },
 );
 
