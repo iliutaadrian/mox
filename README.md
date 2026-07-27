@@ -252,6 +252,33 @@ IMAP ──▶ local SQLite (body + html + local category/done columns)
 
 Built with [OpenTUI](https://github.com/anomalyco/opentui) + [Solid](https://www.solidjs.com) on [Bun](https://bun.sh).
 
+---
+
+## Tests
+
+```bash
+bun run check          # typecheck + the whole suite (~7s)
+bun run test           # everything
+bun run test:unit      # pure logic only, no rendering
+bun run test:e2e       # the TUI, driven end to end
+```
+
+The end-to-end tests mount the **real `<App/>`** in OpenTUI's in-process test
+renderer (`testRender`) and drive it with real key and mouse events — opening
+mail, paging, searching, the link picker, copy mode, even a mouse drag that
+copies to the system clipboard — then assert on the painted screen
+(`test/helpers/tui.ts`). No terminal emulator and no `pty` is involved, so they
+run headless in about six seconds.
+
+Every test builds a throwaway mailbox: a temp config plus a temp SQLite store
+seeded with synthetic mail, whose account points at an unroutable host
+(`test/helpers/fixture.ts`). **The suite never reads or writes your real
+mailbox**, and it restores your clipboard when it finishes. Actions that need a
+live IMAP connection (`t` trash, `a` archive) are therefore covered at the store
+layer rather than in the UI.
+
+<sub>Screenshots are rendered from a **fictional** demo mailbox — regenerate with `bun docs/demo/seed.ts` and `vhs docs/tapes/<view>.tape`.</sub>
+
 ## License
 
 [MIT](LICENSE)

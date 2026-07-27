@@ -38,6 +38,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emails get the same treatment by numbering their bare URLs. Shared logic
   lives in `src/links.ts`.
 
+### Added (tests)
+- A test suite: `bun run check` (typecheck + tests, ~7s), `bun run test:unit`,
+  `bun run test:e2e`. 86 tests over the store, width/copy helpers, draft MIME,
+  numbered links, and the TUI itself.
+- The end-to-end tests mount the real `<App/>` in OpenTUI's in-process test
+  renderer and drive it with real key and mouse events, asserting on the painted
+  screen (`test/helpers/tui.ts`). Each test runs against a throwaway fixture
+  mailbox pointed at an unroutable host (`test/helpers/fixture.ts`), so the suite
+  never touches the real mailbox.
+- `tidyCopy()` moved into `src/text.ts` so the copy-padding rule is unit-tested;
+  it now also preserves a selection that is entirely whitespace.
+
 ### Changed
 - Keybindings: **trash moved from `d` to `t`** and **restore from `u` to `z`**,
   freeing `d`/`u` for half-page down/up in both the list and the reader. The

@@ -58,6 +58,19 @@ export function oneLine(s: string): string {
   return emojiPresentation(s.replace(/[\r\n\t]+/g, " "));
 }
 
+/** Strip the right-hand padding the reading pane adds to every row, so copied
+ * text carries no filler. Leading space is real indentation and is kept, and a
+ * selection that is ALL whitespace is returned untouched rather than emptied. */
+export function tidyCopy(text: string): string {
+  const tidied = text
+    .split("\n")
+    .map((l) => l.replace(/[ \t]+$/, ""))
+    .join("\n");
+  // Nothing but whitespace left means the whole selection WAS whitespace, so
+  // hand back what was selected instead of a run of bare newlines.
+  return tidied.trim().length ? tidied : text || tidied;
+}
+
 // Measure with the SAME library Ink uses to lay out (string-width). A hand-
 // rolled wcwidth disagrees on some emoji/CJK; a single-cell disagreement makes
 // a row wrap inside its pane, which under rapid re-renders (holding a key) tears

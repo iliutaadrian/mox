@@ -20,7 +20,7 @@ import { Store, FOLDER_CLASSES, type Filter, type MessageRow } from "./db.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { backend } from "./backend.ts";
 import { warmConnections } from "./mail.ts";
-import { fit, oneLine } from "./text.ts";
+import { fit, oneLine, tidyCopy } from "./text.ts";
 import { renderEmail, filterLinks, type RenderedEmail, type LinkRef } from "./links.ts";
 import { copyToClipboard } from "./clipboard.ts";
 
@@ -456,10 +456,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
 
   // ----- copy mode (`y`) -----
   function copyOut(text: string, label: string) {
-    // Reader rows are padded to the pane width, so a selection that runs past
-    // the end of a line would carry that filler along.
-    const tidied = text.split("\n").map((l) => l.replace(/[ \t]+$/, "")).join("\n");
-    const r = copyToClipboard(tidied.trim().length ? tidied : text || tidied);
+    const r = copyToClipboard(tidyCopy(text));
     batch(() => {
       setCopy(null);
       setStatus(r.ok ? `copied ${label}` : `clipboard error: ${r.error.slice(0, 100)}`);
