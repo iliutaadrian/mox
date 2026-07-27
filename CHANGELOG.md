@@ -16,6 +16,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from the provider's own UI.
 - `Store.full()` now exposes the message's `message_id` (used for reply threading).
 
+### Added (numbered links)
+- Reader link picker (`o`): email bodies render with lynx's `[N]` link
+  references inline (no more raw URL dump at the bottom), and `o` opens a
+  filterable picker over them — type the number, label text or domain, enter
+  opens the link in the browser. Tracking-looking links are tagged. Plain-text
+  emails get the same treatment by numbering their bare URLs. Shared logic
+  lives in `src/links.ts`, exercised by the `mock:links` lab.
+
 ### Changed
 - Interactive refresh (`r`) now syncs **Sent** alongside INBOX, so replies sent
   from the provider's UI show up locally without a full `cli sync`.

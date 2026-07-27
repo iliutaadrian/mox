@@ -147,6 +147,7 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | `j` / `k` | Scroll the email |
 | `h` / `l` | Previous / next email |
 | `v` | Open the full HTML email in the browser |
+| `o` | Open a link: filterable picker over the `[N]` references in the body |
 | `s` | Download attachments to `./Attachments` (subfolder if multiple) |
 | `e`/`a`/`d` | Done / archive / trash |
 | `u` | Restore (in Trash / Archive / done) |

@@ -11,7 +11,7 @@
 import { useKeyboard, useTerminalDimensions, useRenderer } from "@opentui/solid";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
 import { createSignal, createMemo, createEffect, onMount, onCleanup, For, Show, batch } from "solid-js";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,7 @@ import { loadConfig, type Config } from "./config.ts";
 import { backend } from "./backend.ts";
 import { warmConnections } from "./mail.ts";
 import { fit, oneLine } from "./text.ts";
+import { renderEmail, filterLinks, type RenderedEmail, type LinkRef } from "./links.ts";
 
 const SIDEBAR_W = 26;
 const PAGE = 200; // lazy-load window: rows fetched per view, grown as you scroll down
@@ -99,21 +100,6 @@ function filterOf(e: SideEntry): Filter {
   if (e.kind === "category") return { kind: "category", name: e.name };
   if (e.kind === "folder") return { kind: "folder", class: e.cls };
   return { kind: "all", exclude: e.kind === "all" ? e.exclude : [] };
-}
-
-// Render an email to display text: lynx flows the HTML (layout tables → text,
-// links as [N] refs); plain-text body otherwise. Runs once per open (cached).
-function renderEmailBody(html: string, body: string, width: number): string {
-  if (html.trim()) {
-    const l = spawnSync(
-      "lynx",
-      ["-dump", "-force_html", "-nomargins", `-width=${Math.max(40, width)}`, "-assume_charset=utf-8", "-display_charset=utf-8", "-stdin"],
-      { input: html, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-    );
-    if (l.status === 0 && l.stdout.trim()) return l.stdout;
-    if (!body.trim()) return html.replace(/<[^>]+>/g, " ").replace(/\s+\n/g, "\n");
-  }
-  return body;
 }
 
 // Case-insensitive substring filter for picker options (empty query = all).
@@ -230,7 +216,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   onMount(() => {
     let inFlight = false;
     const id = setInterval(async () => {
-      if (inFlight || busy() || typing() || picker() !== null) return;
+      if (inFlight || busy() || typing() || picker() !== null || linkPicker() !== null) return;
       inFlight = true;
       try {
         const r = await be.sync();
@@ -255,7 +241,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   // renderCache holds the lynx-rendered text per email+width so scrolling is
   // instant and lynx runs once. Both are plain Maps — the component body runs
   // once under Solid, so they persist without a ref wrapper.
-  const renderCache = new Map<string, string>();
+  const renderCache = new Map<string, RenderedEmail>();
   const bodyCache = new Map<number, { body: string; html: string }>();
   const [fetchTick, setFetchTick] = createSignal(0);
 
@@ -274,17 +260,31 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     });
   });
 
-  const readingBody = createMemo(() => {
+  const readingRendered = createMemo<RenderedEmail>(() => {
     const o = opened();
-    if (!o) return "";
+    if (!o) return { body: "", links: [], hiddenCount: 0 };
     fetchTick(); // re-run once the on-demand body arrives
     const c = bodyCache.get(o.id);
     const html = o.html.trim() ? o.html : (c?.html ?? "");
     const body = o.body.trim() ? o.body : (c?.body ?? "");
-    if (!html.trim() && !body.trim()) return c ? "" : "(fetching…)";
+    if (!html.trim() && !body.trim()) return { body: c ? "" : "(fetching…)", links: [], hiddenCount: 0 };
     const key = `${o.id}:${listW()}`;
-    if (!renderCache.has(key)) renderCache.set(key, renderEmailBody(html, body, listW()));
+    if (!renderCache.has(key)) renderCache.set(key, renderEmail(html, body, listW()));
     return renderCache.get(key)!;
+  });
+  const readingBody = createMemo(() => {
+    const r = readingRendered();
+    if (!r.links.length && !r.hiddenCount) return r.body;
+    const summary =
+      `  ${r.links.length} numbered link${r.links.length === 1 ? "" : "s"}` +
+      (r.hiddenCount ? ` · ${r.hiddenCount} hidden link${r.hiddenCount === 1 ? "" : "s"} omitted` : "");
+    return `${r.body.replace(/\s+$/, "")}\n\nReferences\n${summary}${r.links.length ? " · o to open" : ""}`;
+  });
+  // Link picker over the open email's [N] references (reading mode, `o`).
+  const [linkPicker, setLinkPicker] = createSignal<{ idx: number; query: string } | null>(null);
+  createEffect(() => {
+    opened(); // changed message or left reading mode → stale link list, close it
+    setLinkPicker(null);
   });
 
   const targets = (): number[] => {
@@ -450,6 +450,27 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       return;
     }
 
+    if (linkPicker()) {
+      const p = linkPicker()!;
+      const filtered = filterLinks(readingRendered().links, p.query);
+      if (name === "escape") setLinkPicker(null);
+      else if (name === "down") setLinkPicker({ ...p, idx: Math.min(p.idx + 1, Math.max(0, filtered.length - 1)) });
+      else if (name === "up") setLinkPicker({ ...p, idx: Math.max(0, p.idx - 1) });
+      else if (name === "return" || name === "enter") {
+        const link = filtered[p.idx];
+        if (link) {
+          spawn("open", [link.url], { stdio: "ignore", detached: true }).unref();
+          setLinkPicker(null);
+          setStatus(`Opened [${link.number}] ${link.host}`);
+        }
+      } else if (name === "backspace" || name === "delete") {
+        setLinkPicker({ idx: 0, query: p.query.slice(0, -1) });
+      } else if (ch && ch.length === 1 && ch >= " " && !e.ctrl && !e.meta) {
+        setLinkPicker({ idx: 0, query: p.query + ch });
+      }
+      return;
+    }
+
     if (mode() === "reading") {
       const c = current();
       if (name === "escape" || ch === "q" || name === "backspace") {
@@ -464,7 +485,10 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       } else if (ch === "l" || name === "right") scrollList(1, true); // next email
       else if (ch === "h" || name === "left") scrollList(-1, true); // previous email
       else if (ch === "v") openInBrowser();
-      else if (ch === "s") {
+      else if (ch === "o") {
+        if (readingRendered().links.length) setLinkPicker({ idx: 0, query: "" });
+        else setStatus("no links in this email");
+      } else if (ch === "s") {
         if (c) void doBackend("Downloading attachments", () => be.download(c.id));
       } else if (ch === "e") {
         setScroll(0);
@@ -589,7 +613,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     moveCat(ev.scroll?.direction === "up" ? -1 : 1);
   };
   const onListScroll = (ev: MouseEvent) => {
-    if (picker() || typing()) return;
+    if (picker() || linkPicker() || typing()) return;
     if (mode() === "reading") {
       setScroll((s) => Math.max(0, s + (ev.scroll?.direction === "up" ? -3 : 3)));
     } else scrollList(ev.scroll?.direction === "up" ? -3 : 3);
@@ -616,7 +640,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   });
   const hint = createMemo(() =>
     mode() === "reading"
-      ? `j/k scroll · h/l prev/next · v html${hasAtts() ? " · s save files" : ""} · ${actionHint()} · M/U read · esc/q back`
+      ? `j/k scroll · h/l prev/next · v html${readingRendered().links.length ? " · o links" : ""}${hasAtts() ? " · s save files" : ""} · ${actionHint()} · M/U read · esc/q back`
       : `enter open · ${actionHint()} · m move · g goto · n/p unread · / search · r refresh · q quit${selected().size > 0 ? ` · ${selected().size} selected` : ""}`,
   );
 
@@ -820,6 +844,18 @@ export function App(props: { dbPath: string; cfgPath: string }) {
           );
         }}
       </Show>
+
+      <Show when={linkPicker()}>
+        {(p) => (
+          <LinkPicker
+            state={p()}
+            links={filterLinks(readingRendered().links, p().query)}
+            total={readingRendered().links.length}
+            width={dims().width}
+            height={dims().height}
+          />
+        )}
+      </Show>
     </box>
   );
 }
@@ -828,6 +864,54 @@ export function App(props: { dbPath: string; cfgPath: string }) {
 // the Solid reconciler, so color goes through `style.fg` (typed loosely there).
 function Seg(props: { fg?: string; text: string }) {
   return <span style={{ fg: props.fg } as any}>{props.text}</span>;
+}
+
+// Filterable overlay over the open email's [N] link references: type a number
+// or text to narrow, enter opens the link in the browser.
+function LinkPicker(props: {
+  state: { idx: number; query: string };
+  links: LinkRef[];
+  total: number;
+  width: number;
+  height: number;
+}) {
+  const width = () => Math.max(30, Math.min(92, props.width - 8));
+  const maxItems = () => Math.max(1, Math.min(props.links.length, props.height - 10));
+  const start = () => Math.max(0, Math.min(props.state.idx - Math.floor(maxItems() / 2), props.links.length - maxItems()));
+  const shown = () => props.links.slice(start(), start() + maxItems());
+
+  return (
+    <box
+      position="absolute"
+      left={Math.max(1, Math.floor((props.width - width()) / 2) - 3)}
+      top={Math.max(1, Math.floor((props.height - maxItems() - 8) / 2))}
+      zIndex={10}
+      border
+      borderStyle="rounded"
+      borderColor={PINK}
+      backgroundColor={BLACK}
+      flexDirection="column"
+      paddingLeft={2}
+      paddingRight={2}
+    >
+      <text fg={PINK} attributes={TextAttributes.BOLD}>{`Open numbered link (${props.total})`}</text>
+      <text fg={props.state.query ? BLUE : DIM}>{fit(`/${props.state.query}▏  reference number, label, or domain`, width())}</text>
+      <Show when={props.links.length} fallback={<text fg={DIM}>{fit("no match", width())}</text>}>
+        <For each={shown()}>
+          {(link, index) => {
+            const absolute = () => start() + index();
+            const active = () => absolute() === props.state.idx;
+            return (
+              <text bg={active() ? PINK : undefined} fg={active() ? BLACK : undefined}>
+                {fit(`${active() ? ">" : " "} [${link.number}] ${link.url.replace(/^https?:\/\//i, "")}${link.tracking ? " [tracking]" : ""}`, width())}
+              </text>
+            );
+          }}
+        </For>
+      </Show>
+      <text fg={DIM}>type number/text · ↑/↓ move · enter open in browser · esc</text>
+    </box>
+  );
 }
 
 function Reading(props: {
