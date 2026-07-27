@@ -330,6 +330,8 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   // body and the References tail). Without this the pane scrolls off into blank
   // space past the end of the message.
   const maxScroll = createMemo(() => Math.max(0, readerLines().length - bodyH()));
+  // `d`/`u` jump half a pane, so a few lines of context survive the jump.
+  const page = () => Math.max(1, Math.floor(bodyH() / 2));
 
   const lineAt = (i: number) => readerLines()[i] ?? "";
   const clampCol = (line: number, col: number) => Math.max(0, Math.min(col, Math.max(0, lineAt(line).length - 1)));
@@ -455,11 +457,9 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   // ----- copy mode (`y`) -----
   function copyOut(text: string, label: string) {
     // Reader rows are padded to the pane width, so a selection that runs past
-    // the end of a line would carry that filler along. Leading space is kept
-    // (it is real indentation), and a selection that is ALL whitespace is kept
-    // as-is rather than trimmed away to nothing.
+    // the end of a line would carry that filler along.
     const tidied = text.split("\n").map((l) => l.replace(/[ \t]+$/, "")).join("\n");
-    const r = copyToClipboard(tidied.length ? tidied : text);
+    const r = copyToClipboard(tidied.trim().length ? tidied : text || tidied);
     batch(() => {
       setCopy(null);
       setStatus(r.ok ? `copied ${label}` : `clipboard error: ${r.error.slice(0, 100)}`);
@@ -691,7 +691,11 @@ export function App(props: { dbPath: string; cfgPath: string }) {
         setScroll((s) => Math.min(s + 1, maxScroll())); // scroll the email, not to the next one
       } else if (ch === "k" || name === "up") {
         setScroll((s) => Math.max(0, s - 1));
-      } else if (ch === "l" || name === "right") scrollList(1, true); // next email
+      } else if (ch === "d") setScroll((s) => Math.min(s + page(), maxScroll())); // half-page down
+      else if (ch === "u") setScroll((s) => Math.max(0, s - page())); // half-page up
+      else if (ch === "g") setScroll(0); // top of the email
+      else if (ch === "G") setScroll(maxScroll()); // bottom of the email
+      else if (ch === "l" || name === "right") scrollList(1, true); // next email
       else if (ch === "h" || name === "left") scrollList(-1, true); // previous email
       else if (ch === "v") openInBrowser();
       else if (ch === "o") {
@@ -708,10 +712,10 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       } else if (ch === "a") {
         batch(() => { setMode("list"); setScroll(0); });
         void doBackend("Archiving on server", () => be.archive(targets()));
-      } else if (ch === "d") {
+      } else if (ch === "t") {
         batch(() => { setMode("list"); setScroll(0); });
         void doBackend("Trashing on server", () => be.trash(targets()));
-      } else if (ch === "u") {
+      } else if (ch === "z") {
         if (c?.mailbox === "Trash") {
           batch(() => { setMode("list"); setScroll(0); });
           void doBackend("Restoring from Trash", () => be.untrash(targets()));
@@ -765,6 +769,13 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     } else if (ch === "k" || name === "up") {
       if (focus() === "sidebar") moveCat(-1);
       else scrollList(-1);
+    } else if (ch === "d") {
+      // Half-page through whichever pane has focus.
+      if (focus() === "sidebar") for (let i = 0; i < page(); i++) moveCat(1);
+      else moveTo(safeMsgIdx() + page());
+    } else if (ch === "u") {
+      if (focus() === "sidebar") for (let i = 0; i < page(); i++) moveCat(-1);
+      else moveTo(safeMsgIdx() - page());
     } else if (name === "space" && current()) {
       const c = current()!;
       const next = new Set(selected());
@@ -783,8 +794,8 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     else if (ch === "s" && current()) void doBackend("Downloading attachments", () => be.download(current()!.id));
     else if (ch === "e" && targets().length > 0) markDone(targets(), true, `done ${targets().length}`);
     else if (ch === "a" && targets().length > 0) void doBackend("Archiving on server", () => be.archive(targets()));
-    else if (ch === "d" && targets().length > 0) void doBackend("Trashing on server", () => be.trash(targets()));
-    else if (ch === "u" && targets().length > 0) {
+    else if (ch === "t" && targets().length > 0) void doBackend("Trashing on server", () => be.trash(targets()));
+    else if (ch === "z" && targets().length > 0) {
       // Restore: opposite of trash/archive/done depending on where the mail is.
       const c = current();
       if (c?.mailbox === "Trash") void doBackend("Restoring from Trash", () => be.untrash(targets()));
@@ -861,10 +872,10 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   });
   const actionHint = createMemo(() =>
     inTrashOrArchive()
-      ? "u restore"
+      ? "z restore"
       : current()?.done
-        ? "u restore · a archive · d trash"
-        : "e done · a archive · d trash",
+        ? "z restore · a archive · t trash"
+        : "e done · a archive · t trash",
   );
   const hasAtts = createMemo(() => {
     const o = opened();
@@ -880,8 +891,8 @@ export function App(props: { dbPath: string; cfgPath: string }) {
         : `COPY · hjkl move · v select · y line · i/f/s/a fields · esc`;
     }
     return mode() === "reading"
-      ? `j/k scroll · h/l prev/next · v html${readingRendered().links.length ? " · o links" : ""} · y copy${hasAtts() ? " · s save files" : ""} · ${actionHint()} · M/U read · esc/q back`
-      : `enter open · ${actionHint()} · m move · g goto · y copy · n/p unread · / search · r refresh · q quit${selected().size > 0 ? ` · ${selected().size} selected` : ""}`;
+      ? `j/k scroll · d/u page · g/G ends · h/l prev/next · v html${readingRendered().links.length ? " · o links" : ""} · y copy${hasAtts() ? " · s save files" : ""} · ${actionHint()} · M/U read · esc/q back`
+      : `enter open · ${actionHint()} · d/u page · m move · g goto · y copy · n/p unread · / search · r refresh · q quit${selected().size > 0 ? ` · ${selected().size} selected` : ""}`;
   });
 
   const headerNote = createMemo(() =>

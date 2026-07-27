@@ -103,7 +103,10 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 | `j`/`k` `↓`/`↑`   | move cursor / scroll        | next/prev email  |
 | `enter`           | open email                  | —                |
 | `h`/`l` `tab`     | switch sidebar↔list focus   | —                |
-| `ctrl+d`/`ctrl+u` | —                           | half-page scroll |
+| `d`/`u`           | half-page down/up           | half-page scroll |
+| `g`/`G`           | goto picker / bottom        | start/end of email |
+| `t`               | trash                       | trash            |
+| `z`               | restore (undone/unarchive/untrash) | restore   |
 | `space`           | toggle select               | —                |
 | `/`               | search input                | —                |
 | `esc`             | clear select / clear search | back to list     |
@@ -114,7 +117,6 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 | `v`               | open HTML in browser        | HTML in browser  |
 | `o`               | —                           | numbered-link picker |
 | `y`               | copy field (i/f/s/a)        | copy mode (char cursor, v select, y line, i/f/s/a) |
-| `u`               | restore (undone/unarchive/untrash) | restore   |
 | `q`               | quit                        | back to list     |
 
 ---

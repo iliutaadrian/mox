@@ -39,6 +39,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lives in `src/links.ts`.
 
 ### Changed
+- Keybindings: **trash moved from `d` to `t`** and **restore from `u` to `z`**,
+  freeing `d`/`u` for half-page down/up in both the list and the reader. The
+  reader also gained `g`/`G` to jump to the start/end of an email. In the list
+  `g` still opens the goto picker (`gg` jumps to the top, `G` to the bottom).
 - Interactive refresh (`r`) now syncs **Sent** alongside INBOX, so replies sent
   from the provider's UI show up locally without a full `cli sync`.
 - `s` saves attachments to `./Attachments` (under the directory mox was

@@ -14,7 +14,7 @@
 
 <img src="docs/demo.gif" width="820" alt="Demo: jump INBOX → ALL → Work with the goto picker, mark an email done so it leaves the inbox, then restore it from ALL">
 
-*`g` jumps between views · `e` marks an email done (it leaves the inbox) · `u` restores it — all keyboard, all local.*
+*`g` jumps between views · `e` marks an email done (it leaves the inbox) · `z` restores it — all keyboard, all local.*
 
 </div>
 
@@ -43,7 +43,7 @@ Three honest reasons:
 | 🗂 **Category sidebar** | New mail is filed into a category on fetch. The sidebar shows **INBOX** (active mail only), **Mailboxes** (ALL + per-account), your **Filters** (categories), and server **Folders** (Sent / Spam / Archived / Trash) — each with a live count. |
 | ⚡ **Rule-based, instant** | Filing is deterministic: the first category whose `match` claims a message wins (`domains`, `addresses`, or subject/sender `words`). No AI, no API key, no network round-trip. Order in the config *is* precedence. Edit the rules and run `mox --reclassify` to re-file existing mail — adds re-file, removals fall back to Uncategorized. |
 | 🔒 **Local by construction** | Categories and the local-only **done** state live only in your SQLite DB. mox never writes labels/folders to the server. Delete `~/Documents/mox` and it never happened. |
-| 🧹 **One-key triage** | `e` done · `a` archive · `d` trash — each with an inverse (`u`). Multi-select with `space`, then act on the whole batch. Read/unread (`M`/`U`) sync to the server; done is local. |
+| 🧹 **One-key triage** | `e` done · `a` archive · `t` trash — each with an inverse (`z`). Multi-select with `space`, then act on the whole batch. Read/unread (`M`/`U`) sync to the server; done is local. |
 | 🔀 **Type-to-filter move** | `m` opens a fuzzy picker over every category — type a few letters, `enter`, done. Same picker powers `g` **goto** for jumping between views. |
 | 🔎 **Live search** | `/` filters the current view as you type, with operators (`from:`, `subject:`, `is:unread`). `n`/`p` jump between unread. |
 | 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — saved under `./Attachments` (single file, or a per-email subfolder). |
@@ -127,11 +127,12 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | --- | --- |
 | `enter` | Open the highlighted email |
 | `j`/`k` (↑↓) | Move cursor / scroll |
+| `d` / `u` | Half-page down / up (whichever pane has focus) |
 | `tab` / `h` `l` | Switch focus between sidebar and list |
 | `space` | Select / deselect (multi-select) |
 | `e` | **Done** — hide from INBOX (local only) |
-| `a` / `d` | **Archive** / **Trash** on the server |
-| `u` | **Restore** — undone / unarchive / untrash |
+| `a` / `t` | **Archive** / **Trash** on the server |
+| `z` | **Restore** — undone / unarchive / untrash |
 | `m` | Move the selection to a category |
 | `y` | **Copy** — then `i` id, `f` sender address, `s` subject, `a` row (works on the whole multi-selection) |
 | `g` | **Goto** — jump to any view |
@@ -146,14 +147,16 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | Key | Action |
 | --- | --- |
 | `j` / `k` | Scroll the email |
+| `d` / `u` | Half-page down / up |
+| `g` / `G` | Jump to the start / end of the email |
 | `h` / `l` | Previous / next email |
 | `v` | Open the full HTML email in the browser |
 | `o` | Open a link: filterable picker over the `[N]` references in the body |
 | `y` | **Copy mode** — `h`/`j`/`k`/`l` move a character cursor (`0`/`$` line ends, `g`/`G` email ends), `y` copies the cursor's line, `v` starts a selection that `y` then copies; or `i` id, `f` sender, `s` subject, `a` the whole email |
 | drag | Select text with the mouse — releasing copies the selection |
 | `s` | Download attachments to `./Attachments` (subfolder if multiple) |
-| `e`/`a`/`d` | Done / archive / trash |
-| `u` | Restore (in Trash / Archive / done) |
+| `e`/`a`/`t` | Done / archive / trash |
+| `z` | Restore (in Trash / Archive / done) |
 | `M` / `U` | Mark read / unread on the server |
 | `esc` / `q` | Back to the list |
 
@@ -248,8 +251,6 @@ IMAP ──▶ local SQLite (body + html + local category/done columns)
 | `src/mcp.ts` | MCP server for Claude (queries + `create_draft`) |
 
 Built with [OpenTUI](https://github.com/anomalyco/opentui) + [Solid](https://www.solidjs.com) on [Bun](https://bun.sh).
-
-<sub>Screenshots are rendered from a **fictional** demo mailbox — regenerate with `bun docs/demo/seed.ts` and `vhs docs/tapes/<view>.tape`.</sub>
 
 ## License
 
