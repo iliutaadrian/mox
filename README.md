@@ -31,7 +31,7 @@ Three honest reasons:
 <div align="center">
 <img src="docs/reading.png" width="760" alt="Reading pane: headers, category tag, plain-text body; footer shows scroll / prev-next / html / done / archive / trash keys">
 
-*Open anything with `enter`. `v` opens the full HTML in your browser; `s` saves attachments.*
+*Open anything with `enter`. `v` opens the full HTML in your browser; `s` downloads attachments.*
 </div>
 
 ---
@@ -46,7 +46,7 @@ Three honest reasons:
 | 🧹 **One-key triage** | `e` done · `a` archive · `d` trash — each with an inverse (`u`). Multi-select with `space`, then act on the whole batch. Read/unread (`M`/`U`) sync to the server; done is local. |
 | 🔀 **Type-to-filter move** | `m` opens a fuzzy picker over every category — type a few letters, `enter`, done. Same picker powers `g` **goto** for jumping between views. |
 | 🔎 **Live search** | `/` filters the current view as you type, with operators (`from:`, `subject:`, `is:unread`). `n`/`p` jump between unread. |
-| 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — single file or a per-email subfolder. |
+| 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — saved under `./Attachments` (single file, or a per-email subfolder). |
 | 🤖 **MCP for Claude** | An MCP server exposes `search` / `get` / `list` / `stats` over your mail, so Claude Code can sort the leftovers or answer "what did the bank send last week?" — plus `create_draft`, which files a composed reply into your Drafts folder for you to review and send. |
 
 <div align="center">
@@ -147,7 +147,7 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | `j` / `k` | Scroll the email |
 | `h` / `l` | Previous / next email |
 | `v` | Open the full HTML email in the browser |
-| `s` | Save attachments (subfolder if multiple) |
+| `s` | Download attachments to `./Attachments` (subfolder if multiple) |
 | `e`/`a`/`d` | Done / archive / trash |
 | `u` | Restore (in Trash / Archive / done) |
 | `M` / `U` | Mark read / unread on the server |
@@ -157,7 +157,7 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 
 ## Refresh & headless
 
-`r` refreshes **INBOX** over pooled, pre-warmed IMAP connections and reconciles **Trash/Archive** (drops local rows removed on the server). Deeper syncs run headless:
+`r` refreshes **INBOX + Sent** over pooled, pre-warmed IMAP connections and reconciles **Trash/Archive** (drops local rows removed on the server). Deeper syncs run headless:
 
 ```bash
 mox --version                       # print the installed version

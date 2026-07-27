@@ -1,7 +1,6 @@
 // Actions the TUI triggers, run IN-PROCESS (no subprocess). Each returns
 // {ok, out} for the status line. Writes to the server happen only in mark().
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
@@ -37,7 +36,7 @@ async function folderName(cache: Map<string, Map<string, string>>, acc: Account,
 
 export function backend(store: Store, cfg: Config) {
   return {
-    // Interactive refresh: INBOX only (fast). Folders sync via `cli sync`.
+    // Interactive refresh: INBOX + Sent (fast). Other folders sync via `cli sync`.
     async sync(): Promise<Result> {
       try {
         const { fetched, filed } = await refresh(store, cfg, true);
@@ -278,9 +277,10 @@ export function backend(store: Store, cfg: Config) {
       }
     },
 
-    // Download a message's attachments to ~/Downloads. One file → straight into
-    // Downloads; multiple → a subfolder named after the email so they stay
-    // grouped. Name collisions get " (2)", " (3)" … suffixes.
+    // Download a message's attachments to ./Attachments (under the directory
+    // mox was launched from). One file → straight into Attachments; multiple →
+    // a subfolder named after the email so they stay grouped. Name collisions
+    // get " (2)", " (3)" … suffixes.
     async download(id: number): Promise<Result> {
       try {
         const row = store.byIds([id])[0];
@@ -304,8 +304,8 @@ export function backend(store: Store, cfg: Config) {
           return dest;
         };
 
-        const downloads = join(homedir(), "Downloads");
-        let outDir = downloads;
+        const base = join(process.cwd(), "Attachments");
+        let outDir = base;
         if (atts.length > 1) {
           // Folder name from the subject (fallback sender), sanitized + trimmed.
           const label = (full?.subject?.trim() || full?.from_name || row.account || "email")
@@ -313,15 +313,15 @@ export function backend(store: Store, cfg: Config) {
             .replace(/\s+/g, " ")
             .slice(0, 80)
             .trim();
-          outDir = uniquePath(downloads, label); // reuse collision logic for the dir too
+          outDir = uniquePath(base, label); // reuse collision logic for the dir too
           mkdirSync(outDir, { recursive: true });
         } else {
-          mkdirSync(downloads, { recursive: true });
+          mkdirSync(base, { recursive: true });
         }
 
         for (const a of atts) writeFileSync(uniquePath(outDir, a.filename), a.data);
-        const where = atts.length > 1 ? `~/Downloads/${outDir.slice(downloads.length + 1)}/` : "~/Downloads";
-        return { ok: true, out: `saved ${atts.length} to ${where}` };
+        const where = atts.length > 1 ? `Attachments/${outDir.slice(base.length + 1)}/` : "Attachments/";
+        return { ok: true, out: `downloaded ${atts.length} attachment${atts.length > 1 ? "s" : ""} to ${where}` };
       } catch (e) {
         return { ok: false, out: String(e) };
       }

@@ -153,11 +153,18 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const [focus, setFocus] = createSignal<"sidebar" | "list">("sidebar");
   const [mode, setMode] = createSignal<"list" | "reading">("list");
   const [selected, setSelected] = createSignal<Set<number>>(new Set<number>());
-  const [status, setStatus] = createSignal("Press r to fetch new mail");
+  const [status, setStatusRaw] = createSignal("Press r to fetch new mail");
+  const [statusAt, setStatusAt] = createSignal(0); // epoch ms of the last status change
+  const setStatus = (s: string) =>
+    batch(() => {
+      setStatusRaw(s);
+      setStatusAt(Date.now());
+    });
   const [busy, setBusy] = createSignal(false);
   const [scroll, setScroll] = createSignal(0);
   const [picker, setPicker] = createSignal<{ kind: "move" | "goto"; options: string[]; idx: number; query: string } | null>(null);
   const [search, setSearch] = createSignal<string | null>(null); // committed query
+  const [searchAt, setSearchAt] = createSignal(0); // epoch ms of the last search commit
   const [typing, setTyping] = createSignal(false); // search input active
   const [draft, setDraft] = createSignal("");
   const [lastSync, setLastSync] = createSignal<number>(0); // epoch ms of last successful sync
@@ -397,6 +404,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
           setTyping(false);
           setLimit(PAGE);
           setSearch(d ? d : null);
+          setSearchAt(Date.now());
           setFocus("list");
           moveTo(0);
         });
@@ -608,7 +616,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   });
   const hint = createMemo(() =>
     mode() === "reading"
-      ? `j/k scroll · h/l prev/next · v html${hasAtts() ? " · s save" : ""} · ${actionHint()} · M/U read · esc/q back`
+      ? `j/k scroll · h/l prev/next · v html${hasAtts() ? " · s save files" : ""} · ${actionHint()} · M/U read · esc/q back`
       : `enter open · ${actionHint()} · m move · g goto · n/p unread · / search · r refresh · q quit${selected().size > 0 ? ` · ${selected().size} selected` : ""}`,
   );
 
@@ -616,7 +624,9 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     typing()
       ? `  /${draft()}▏` + (draft() === "" ? "  from: subj: body: is:unread has:attachment in:sent" : "")
       : search() !== null
-        ? `  search: "${search()}" (${msgs().length}) · esc clear`
+        ? // Keep action feedback visible in search mode: a status produced after
+          // the search was committed (download/archive/…) replaces "esc clear".
+          `  search: "${search()}" (${msgs().length}) · ${statusAt() > searchAt() ? status() : "esc clear"}`
         : "  " + status(),
   );
   const synced = createMemo(() =>

@@ -16,6 +16,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from the provider's own UI.
 - `Store.full()` now exposes the message's `message_id` (used for reply threading).
 
+### Changed
+- Interactive refresh (`r`) now syncs **Sent** alongside INBOX, so replies sent
+  from the provider's UI show up locally without a full `cli sync`.
+- `s` saves attachments to `./Attachments` (under the directory mox was
+  launched from) instead of `~/Downloads`.
+
 ## [1.3.0] - 2026-07-23
 
 ### Added

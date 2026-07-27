@@ -423,23 +423,31 @@ async function syncOne(
 }
 
 /** syncAll syncs one account over a SINGLE connection (one login, not one per
- * folder). With inboxOnly, only the INBOX is touched — fast enough for the
- * interactive `r` refresh; folders (Sent/Spam/Archive) change rarely and are
- * synced by the headless `cli sync`. */
+ * folder). With quick, only INBOX + Sent are touched — fast enough for the
+ * interactive `r` refresh (Sent stays fresh so replies sent from the provider's
+ * UI show up locally); the remaining folders (Spam/Archive/Trash) change rarely
+ * and are synced by the headless `cli sync`. */
 export async function syncAll(
   store: Store,
   acc: Account,
   fetchLimit: number,
   fetchSinceDays: number,
-  inboxOnly = false,
+  quick = false,
   prefill = false,
   onProgress?: SyncProgress,
 ): Promise<number> {
   // Pooled, kept-alive connection — no logout (see getClient).
   const client = await getClient(acc);
   try {
-    if (inboxOnly) {
-      return await syncOne(client, store, acc, acc.mailbox, CLASS_INBOX, fetchLimit, fetchSinceDays, prefill, onProgress);
+    if (quick) {
+      let total = await syncOne(client, store, acc, acc.mailbox, CLASS_INBOX, fetchLimit, fetchSinceDays, prefill, onProgress);
+      const sent = foldersFromBoxes(await client.list(), acc).find((f) => f.class === CLASS_SENT);
+      if (sent) {
+        // Re-acquire: syncOne can evict + replace the pooled client (see below).
+        const c = await getClient(acc);
+        total += await syncOne(c, store, acc, sent.name, CLASS_SENT, fetchLimit, fetchSinceDays, prefill, onProgress);
+      }
+      return total;
     }
     const folders = foldersFromBoxes(await client.list(), acc);
     let total = 0;

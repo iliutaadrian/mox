@@ -130,17 +130,17 @@ export function reclassifyAll(store: Store, cfg: Config): { filed: number; unfil
 export async function refresh(
   store: Store,
   cfg: Config,
-  inboxOnly = false,
+  quick = false,
   prefill = false,
   onProgress?: SyncProgress,
 ): Promise<{ fetched: number; filed: number; failed: string[] }> {
   // Accounts sync concurrently (independent connections), so total time is the
-  // slowest account, not the sum. inboxOnly keeps the interactive `r` fast. A
-  // failing account is recorded (not silently swallowed) so callers never report
-  // a partial prefill as complete.
+  // slowest account, not the sum. quick (INBOX + Sent) keeps the interactive
+  // `r` fast. A failing account is recorded (not silently swallowed) so callers
+  // never report a partial prefill as complete.
   const results = await Promise.all(
     cfg.accounts.map((acc) =>
-      syncAll(store, acc, cfg.fetchLimit, cfg.fetchSinceDays, inboxOnly, prefill, onProgress)
+      syncAll(store, acc, cfg.fetchLimit, cfg.fetchSinceDays, quick, prefill, onProgress)
         .then((n) => {
           onProgress?.({ account: acc.name, folder: "", phase: "done", done: n, total: n });
           return { n, failed: false };
