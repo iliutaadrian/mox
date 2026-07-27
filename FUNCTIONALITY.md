@@ -28,6 +28,7 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► Ink/React TUI
 | `text.ts`    | 88  | Width-safe text fitting (string-width), emoji presentation normalization.                   |
 | `mouse.ts`   | 59  | SGR mouse tracking (wheel + click), parsed off stdin.                                       |
 | `engine.ts`  | 58  | Fetch orchestration + deterministic rule-filing.                                            |
+| `backup.ts`  | 120 | Scheduled `VACUUM INTO` snapshots of the store into `backup/`, pruned to the newest N.       |
 | `cli.ts`     | 50  | Headless commands (`sync`, `attach`).                                                       |
 
 ---

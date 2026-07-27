@@ -27,6 +27,16 @@ offline_categories: []
 # sidebar entry). Use for noisy/muted buckets you never want in the main views.
 inbox_exclude: [Alerts, Muted]
 
+# Automatic snapshots of the local database into a `backup/` folder next to it
+# (~/Documents/mox/backup when installed, the repo root in dev). Categories, done
+# flags and snooze times live only in that file and are never stored on the mail
+# server, so a lost database cannot be re-synced. A snapshot is taken at startup
+# (and while running) whenever the newest existing one is older than
+# backup_every_hours; only the backup_keep newest are kept.
+backup_enabled: true
+backup_every_hours: 12
+backup_keep: 2
+
 accounts:
   - name: Personal
     imap_host: imap.gmail.com

@@ -43,6 +43,7 @@ Three honest reasons:
 | 🗂 **Category sidebar** | New mail is filed into a category on fetch. The sidebar shows **INBOX** (active mail only), **Mailboxes** (ALL + per-account), your **Filters** (categories), and server **Folders** (Sent / Spam / Archived / Trash) — each with a live count. |
 | ⚡ **Rule-based, instant** | Filing is deterministic: the first category whose `match` claims a message wins (`domains`, `addresses`, or subject/sender `words`). No AI, no API key, no network round-trip. Order in the config *is* precedence. Edit the rules and run `mox --reclassify` to re-file existing mail — adds re-file, removals fall back to Uncategorized. |
 | 🔒 **Local by construction** | Categories and the local-only **done** state live only in your SQLite DB. mox never writes labels/folders to the server. Delete `~/Documents/mox` and it never happened. |
+| 💾 **Backed up on a schedule** | Because that database is the only copy of your categories and done state, mox snapshots it to `backup/` every 12 hours (configurable, keeps the last 2) using SQLite's `VACUUM INTO`. |
 | 🧹 **One-key triage** | `e` done · `a` archive · `t` trash — each with an inverse (`z`). Multi-select with `space`, then act on the whole batch. Read/unread (`M`/`U`) sync to the server; done is local. |
 | 🔀 **Type-to-filter move** | `m` opens a fuzzy picker over every category — type a few letters, `enter`, done. Same picker powers `g` **goto** for jumping between views. |
 | 🔎 **Live search** | `/` filters the current view as you type, with operators (`from:`, `subject:`, `is:unread`). `n`/`p` jump between unread. |
@@ -98,6 +99,18 @@ $EDITOR ~/Documents/mox/config.yaml
 ```
 
 Running from source uses `./config.yaml` at the repo root instead. Lookup order: `$MOX_CONFIG` → `./config.yaml` (dev) → `~/Documents/mox/config.yaml`. The SQLite store sits beside it (`$MOX_DB` overrides). For Gmail/Yahoo, use an **App Password**, not your account password.
+
+### Backups
+
+Your categories, the local-only **done** flag and snooze times exist *only* in that SQLite file - they are never mirrored to the mail server, so a lost database cannot be re-synced. mox therefore snapshots it into a `backup/` folder next to the database (`~/Documents/mox/backup/` installed, the repo root in dev):
+
+```yaml
+backup_enabled: true      # off only if you write exactly `false`
+backup_every_hours: 12    # a snapshot is taken when the newest one is older than this
+backup_keep: 2            # older snapshots are pruned
+```
+
+A snapshot is taken at startup when one is due, and re-checked hourly so a session left open for days keeps snapshotting. Snapshots are written with SQLite's `VACUUM INTO`, not by copying files - the store runs in WAL mode, where a plain copy can silently miss recent writes. A failed backup (full disk, unwritable folder) is reported and then ignored; it never stops mox from opening.
 
 Categories are matched top-to-bottom; the first `match` that claims a message wins, so **order is precedence**:
 
