@@ -48,7 +48,7 @@ Three honest reasons:
 | 🔀 **Type-to-filter move** | `m` opens a fuzzy picker over every category — type a few letters, `enter`, done. Same picker powers `g` **goto** for jumping between views. |
 | 🔎 **Live search** | `/` filters the current view as you type, with operators (`from:`, `subject:`, `is:unread`). `n`/`p` jump between unread. |
 | 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — saved under `./Attachments` (single file, or a per-email subfolder). |
-| 🤖 **MCP for Claude** | An MCP server exposes `search_emails` / `get_email` over your mail, so Claude Code can sort the leftovers or answer "what did the bank send last week?" — plus `create_draft`, which files a composed reply into your Drafts folder for you to review and send. |
+| 🤖 **MCP for Claude** | An MCP server lets Claude Code read *and triage* your mail: get the inbox, search, mark done, trash/archive, re-file a whole sender into a category, download attachments, and draft replies for you to send. Local-only actions stay local; server moves are labelled as such. |
 
 <div align="center">
 <img src="docs/move.png" width="380" alt="Move picker: type-to-filter list of categories, Finance highlighted"> <img src="docs/goto.png" width="380" alt="Goto picker: full list of views with counts to jump to">
@@ -228,13 +228,27 @@ curl -fsSL https://raw.githubusercontent.com/iliutaadrian/mox/main/install.sh | 
 
 ## Claude / MCP
 
-mox ships an MCP server (`search_emails` / `get_email` / `create_draft`) so Claude Code can query your mail as first-class tools — and draft replies for you. Register it once:
+mox ships an MCP server so Claude Code can read *and triage* your mail as first-class tools. Register it once:
 
 ```bash
 claude mcp add mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
 ```
 
-It reads the same config/DB as the TUI. The only mailbox write is `create_draft`, which appends to the Drafts folder — mox never sends; you review and send from your own mail UI.
+It reads the same config and database as the TUI.
+
+| Tool | What it does |
+| --- | --- |
+| `get_inbox` | The active, not-yet-triaged mail (respects `inbox_exclude`), newest first. `unread_only` optional. |
+| `search_emails` | Full-text search with the same operators as `/` in the TUI. |
+| `get_email` | Full headers, body and HTML for one id. |
+| `triage_emails` | `done`/`undone`, `trash`/`untrash`, `archive`/`unarchive`, `read`/`unread` for one or many ids. |
+| `set_category` | Re-file mail by ids, or **everything from one sender** (`from: "contact@oxigentour.ro"`). |
+| `create_draft` | Compose a reply as a draft. This is the tool for "respond to this email". |
+| `download_attachments` | Fetch one email's files to `./Attachments`. |
+
+**What actually changes where:** `done` and `set_category` are **local only** - they never touch your mail server, which is why they are safe to hand to a model. `trash`, `archive` and `read`/`unread` are **real IMAP moves**, visible in every other client. `create_draft` only appends to your Drafts folder; mox never sends, so you always review and send yourself.
+
+`set_category` matches a sender as an exact address (not a domain), records the change as your own choice so a later `mox --reclassify` cannot undo it, and only accepts categories that exist in your config or approved list. `download_attachments` saves relative to the directory the MCP server was started in, not the project you happen to be chatting about.
 
 ---
 

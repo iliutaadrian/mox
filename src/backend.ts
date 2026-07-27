@@ -82,6 +82,21 @@ export function backend(store: Store, cfg: Config) {
       }
     },
 
+    // Local-only "archive": done mail drops out of the INBOX view, and the
+    // server never hears about it. Lives here so the TUI and the MCP server
+    // share one implementation (and one wording for the status line).
+    done(ids: number[], done: boolean): Result {
+      try {
+        // Report rows actually flipped: an id that does not exist (or already
+        // has the flag) is not work done, and a tool driven by Claude must not
+        // claim otherwise.
+        const n = store.setDone(ids, done);
+        return { ok: true, out: done ? `done ${n}` : `restored ${n} to inbox` };
+      } catch (e) {
+        return { ok: false, out: String(e) };
+      }
+    },
+
     // Move messages to the server Trash folder, then relabel the local rows to
     // Trash (with their new server UIDs) so they move into the Trash view live.
     async trash(ids: number[]): Promise<Result> {
@@ -224,6 +239,17 @@ export function backend(store: Store, cfg: Config) {
       try {
         store.setCategoryManual(ids, category);
         return { ok: true, out: `moved ${ids.length} to ${category}` };
+      } catch (e) {
+        return { ok: false, out: String(e) };
+      }
+    },
+
+    // Bulk move(): every INBOX message from one exact sender address. Same
+    // local-only category write, so it too survives `mox --reclassify`.
+    moveBySender(addr: string, category: string): Result {
+      try {
+        const n = store.setCategoryBySender(addr, category);
+        return { ok: true, out: n > 0 ? `moved ${n} from ${addr} to ${category}` : `no mail from ${addr}` };
       } catch (e) {
         return { ok: false, out: String(e) };
       }

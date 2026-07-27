@@ -457,16 +457,39 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     tx();
   }
 
+  /** Bulk re-file every INBOX message from one sender. The match is the exact
+   * address (case-insensitive), never the domain - a domain-wide sweep is too
+   * blunt to be safe from a chat prompt. Scoped to INBOX because that is the
+   * only place a category is read (folder rows keep a null category). Marked
+   * 'manual' like a per-message move so `mox --reclassify` cannot undo it.
+   * Returns how many rows changed. */
+  setCategoryBySender(addr: string, category: string): number {
+    const a = addr.trim().toLowerCase();
+    if (!a) return 0;
+    const res = this.db.query(
+      `UPDATE messages SET category=?, source='manual', classified_at=?
+       WHERE mailbox='INBOX' AND lower(COALESCE(from_addr,''))=?`,
+    ).run(category, Math.floor(Date.now() / 1000), a);
+    return res.changes;
+  }
+
   /** Local mirror of a server read/unread flag change. */
   setSeenLocal(id: number, seen: boolean) {
     this.db.query("UPDATE messages SET seen=? WHERE id=?").run(seen ? 1 : 0, id);
   }
 
   /** Mark messages done (local-only "archive" — hidden from the inbox). */
-  setDone(ids: number[], done: boolean) {
-    const stmt = this.db.query("UPDATE messages SET done=? WHERE id=?");
-    const tx = this.db.transaction(() => ids.forEach((id) => stmt.run(done ? 1 : 0, id)));
+  /** Returns how many rows actually changed, so callers can report the truth
+   * rather than the size of the id list they were handed (ids that do not exist,
+   * or already carry the flag, must not be counted as work done). */
+  setDone(ids: number[], done: boolean): number {
+    const stmt = this.db.query("UPDATE messages SET done=? WHERE id=? AND done!=?");
+    let changed = 0;
+    const tx = this.db.transaction(() => {
+      for (const id of ids) changed += stmt.run(done ? 1 : 0, id, done ? 1 : 0).changes;
+    });
     tx();
+    return changed;
   }
 
   /** Hard-remove local rows (after the message was trashed on the server). */

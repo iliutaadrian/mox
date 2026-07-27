@@ -38,6 +38,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emails get the same treatment by numbering their bare URLs. Shared logic
   lives in `src/links.ts`.
 
+### Added (MCP actions)
+- The MCP server can now triage mail, not just read it: `get_inbox` (active
+  undone mail), `triage_emails` (done/undone, trash/untrash, archive/unarchive,
+  read/unread over one or many ids), `set_category` (by ids, or every message
+  from one sender), and `download_attachments`. `create_draft` is retitled and
+  reworded so "respond to this email" reaches for it.
+- Tool descriptions state which actions are local-only (`done`, category) and
+  which are real IMAP moves (trash, archive, read/unread), so a model driving
+  them cannot confuse the two.
+- `Store.setCategoryBySender()` and `backend().done()` / `backend().moveBySender()`
+  back these; `setDone()` now returns how many rows actually changed so a tool
+  reports real work instead of the size of the id list it was handed.
+
 ### Added (backups)
 - Scheduled snapshots of the SQLite store into a `backup/` folder next to the
   database, written with `VACUUM INTO` (a file copy of a WAL database can miss
