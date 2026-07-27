@@ -44,6 +44,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `s` saves attachments to `./Attachments` (under the directory mox was
   launched from) instead of `~/Downloads`.
 
+### Fixed
+- The reading pane no longer scrolls past the end of an email: `j` and the mouse
+  wheel stop once the last line (the References tail, when there is one) is on
+  screen, instead of running the content off into blank space.
+
 ## [1.3.0] - 2026-07-23
 
 ### Added

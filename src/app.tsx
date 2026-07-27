@@ -326,6 +326,11 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     renderer.clearSelection();
   });
 
+  // Furthest the reader can scroll: the last screenful of the email (headers,
+  // body and the References tail). Without this the pane scrolls off into blank
+  // space past the end of the message.
+  const maxScroll = createMemo(() => Math.max(0, readerLines().length - bodyH()));
+
   const lineAt = (i: number) => readerLines()[i] ?? "";
   const clampCol = (line: number, col: number) => Math.max(0, Math.min(col, Math.max(0, lineAt(line).length - 1)));
 
@@ -683,7 +688,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
           setScroll(0);
         });
       } else if (ch === "j" || name === "down") {
-        setScroll((s) => s + 1); // scroll the open email, not next/prev message
+        setScroll((s) => Math.min(s + 1, maxScroll())); // scroll the email, not to the next one
       } else if (ch === "k" || name === "up") {
         setScroll((s) => Math.max(0, s - 1));
       } else if (ch === "l" || name === "right") scrollList(1, true); // next email
@@ -842,7 +847,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const onListScroll = (ev: MouseEvent) => {
     if (picker() || linkPicker() || copy() || typing()) return;
     if (mode() === "reading") {
-      setScroll((s) => Math.max(0, s + (ev.scroll?.direction === "up" ? -3 : 3)));
+      setScroll((s) => Math.max(0, Math.min(s + (ev.scroll?.direction === "up" ? -3 : 3), maxScroll())));
     } else scrollList(ev.scroll?.direction === "up" ? -3 : 3);
   };
 
