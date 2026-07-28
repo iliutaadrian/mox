@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 
 import { maybeBackup } from "./backup.ts";
 import { Store } from "./db.ts";
-import { loadConfig } from "./config.ts";
+import { type Config, loadConfig } from "./config.ts";
 import { prefill, reclassifyAll } from "./engine.ts";
 import { DATA_DIR, resolveCfgPath, resolveDbPath } from "./paths.ts";
 import pkg from "../package.json";
@@ -98,13 +98,31 @@ if (!existsSync(cfgPath)) {
 }
 // dbPath is created on first run if absent.
 
+// Snapshot the store before anything starts writing to it (see ./backup.ts).
+// No-op unless one is due, and best-effort: a full disk or an unwritable folder
+// is reported and then ignored — it must never keep a command from running.
+// EVERY entry point that writes goes through here: the TUI, `mox mcp` (which
+// triages through the same backend()), `--reclassify` and `--prefill`. The
+// read-only `--stats` is the one command that does not need it. Warnings go to
+// stderr, so the MCP protocol stream on stdout stays clean.
+function startBackups(cfg: Config = loadConfig(cfgPath)): void {
+  const first = maybeBackup(dbPath, cfg);
+  if (first.error) console.warn(`mox: backup skipped — ${first.error}`);
+
+  // A session can stay open for days, so re-check on a long interval too;
+  // maybeBackup returns immediately until the schedule comes due. unref so the
+  // timer never holds the process open — the one-shot commands exit regardless.
+  setInterval(() => maybeBackup(dbPath, cfg), 60 * 60 * 1000).unref();
+}
+
 // `mox --reclassify`: re-apply the current config rules to every INBOX message
 // (manual moves preserved), without fetching. Use after editing categories in
 // config.yaml — adding a domain/word files matching mail; removing one drops the
 // now-unmatched mail back to Uncategorized. No network, no config beyond load.
 if (args.includes("--reclassify")) {
-  const store = new Store(dbPath);
   const cfg = loadConfig(cfgPath);
+  startBackups(cfg);
+  const store = new Store(dbPath);
   const { filed, unfiled, scanned } = reclassifyAll(store, cfg);
   store.close();
   console.log(`reclassified ${scanned} inbox messages: ${filed} filed, ${unfiled} back to Uncategorized`);
@@ -154,8 +172,9 @@ if (args.includes("--stats")) {
 // over the whole INBOX (searchable offline) and cache full bodies for the
 // offline categories, then exit. Normal launch fetches only `fetch_limit`.
 if (args.includes("--prefill")) {
-  const store = new Store(dbPath);
   const cfg = loadConfig(cfgPath);
+  startBackups(cfg);
+  const store = new Store(dbPath);
 
   // Tiny ANSI helpers + progress bar — this path only runs in a real terminal.
   const C = { dim: "\x1b[2m", green: "\x1b[32m", cyan: "\x1b[36m", bold: "\x1b[1m", red: "\x1b[31m", yellow: "\x1b[33m", off: "\x1b[0m" };
@@ -261,24 +280,6 @@ if (args.includes("--prefill")) {
 // protocol stream. Nothing may write to stdout before the handoff, which is why
 // the renderer and the interface are imported inside that branch rather than at
 // the top of this file — on the MCP path no terminal code is ever loaded.
-// Snapshot the store before either interface starts writing to it (see
-// ./backup.ts). No-op unless one is due, and best-effort: a full disk or an
-// unwritable folder is reported and then ignored — it must never keep the client
-// from starting. Both entry points need it: `mox mcp` triages through the same
-// backend() as the TUI, and for a user who works mostly from Claude Code it is
-// the only process that ever touches the store. Warnings go to stderr, so the
-// MCP protocol stream on stdout stays clean.
-function startBackups(): void {
-  const backupCfg = loadConfig(cfgPath);
-  const first = maybeBackup(dbPath, backupCfg);
-  if (first.error) console.warn(`mox: backup skipped — ${first.error}`);
-
-  // A session can stay open for days, so re-check on a long interval too;
-  // maybeBackup returns immediately until the schedule comes due. unref so the
-  // timer never holds the process open on exit.
-  setInterval(() => maybeBackup(dbPath, backupCfg), 60 * 60 * 1000).unref();
-}
-
 if (args[0] === "mcp") {
   // Startup failures here reach a machine, not a terminal: Claude Code sees only
   // the exit code and stderr. Report one readable line and a non-zero exit
