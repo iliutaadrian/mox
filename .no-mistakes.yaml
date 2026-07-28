@@ -1,0 +1,119 @@
+# no-mistakes repo config for mox.
+#
+# Only trusted when this file is present on the default branch (main). A copy on
+# a feature branch is ignored, so a PR cannot inject commands into the gate.
+
+commands:
+  test: bun run check
+  lint: bun run typecheck
+
+instructions:
+  intent: |
+    mox is a local, rule-based terminal email client. Two shipping surfaces: the
+    OpenTUI/Solid interface and the MCP server. Judge every change against the
+    project's three fixed promises, and say plainly when a change breaks one:
+      1. No model in the loop for categorization. Filing is deterministic rules.
+      2. The mail server is read-only except explicit triage (\Seen, archive,
+         trash, and appending a draft). mox has no SMTP and never sends.
+      3. Category and the "done" flag live only in the local SQLite store and are
+         never mirrored to the server.
+    Scope reduction is often deliberate here. When the intent says a command,
+    flag or entry point was removed on purpose, do not report the removal as
+    missing functionality.
+
+  rebase: |
+    Do not reorder or squash the author's commits. The history is meant to stay
+    bisectable, one logical change per commit.
+
+  review: |
+    Harsh review. No praise, no restatement of the diff, no summary of what the
+    code does. Report only defects, and rank by real user impact.
+
+    Report, highest priority first:
+      - Anything that reaches the real mailbox from a test or a dev run. The
+        installed binary uses ~/Documents/mox/mox.db; a source checkout uses the
+        repo's ./mox.db. Tests must set MOX_CONFIG and MOX_DB at an unroutable
+        host. A test that could touch the real store is the worst defect in this
+        repo, regardless of severity elsewhere.
+      - A write to the mail server that does not go through backend(). There must
+        be exactly one implementation of trash, archive, read state and done.
+      - Silent failure. Swallowed exceptions, empty catch blocks, a process that
+        exits 0 after failing, an error path that reports success. src/index.tsx
+        installs no-op uncaughtException and unhandledRejection handlers for the
+        interface; any code path that inherits them and needs diagnostics is a
+        defect.
+      - A documented command, flag or tool that the shipped artifact does not
+        actually contain. scripts/build.ts compiles src/index.tsx only, so
+        anything reachable only from another entry file is unavailable to a user
+        who installed the binary.
+      - MCP tool descriptions that do not state whether an action is local-only
+         (done, category) or a real IMAP move (trash, archive, read state). A
+        model driving these tools must not be able to confuse the two.
+      - Concurrency and connection handling: an IMAP client used after a
+        reconnect replaced it, an unhandled EventEmitter error, a pooled
+        connection left in the pool after it died.
+      - SQLite: a query built by string interpolation, a write outside a
+        transaction where the batch matters, a schema change with no migration.
+
+    Do not report formatting, naming taste, or missing comments. Do not propose
+    new abstractions. Do not suggest adding a wrapper, a service layer or a
+    config option for a one-off need.
+
+  test: |
+    `bun run check` is the authoritative suite: typecheck plus every test, about
+    7 seconds.
+
+    Absolute rule: no test, and no manual verification, may touch the real
+    mailbox or the real store. Build fixtures with test/helpers/fixture.ts, which
+    sets MOX_CONFIG and MOX_DB and points the account at an unroutable host. Never
+    read or write ~/Documents/mox/mox.db. Never open a real IMAP connection.
+
+    For interface behavior, mount the real <App/> in OpenTUI's in-process test
+    renderer (test/helpers/tui.ts) and assert on the painted screen. Do not assert
+    on internal signals.
+
+    For the MCP server, drive the compiled binary over stdio the way Claude Code
+    does: `mox mcp`, then a real initialize handshake and tools/call. Testing the
+    module by import does not prove the shipped binary works.
+
+    A regression test must assert the specific expected value, not an invariant
+    the broken code already satisfied. Prefer exact holes, exact ids, exact
+    rendered lines.
+
+  document: |
+    Four files must agree, and a keybinding or command change means all of them:
+      - README.md: user-facing. Every command shown must work on the installed
+        binary. Never document a command that needs a source checkout without
+        marking it so.
+      - CHANGELOG.md: Keep a Changelog format. Every user-visible change needs an
+        entry under [Unreleased]. .github/workflows/release.yml cuts release notes
+        by matching the `## [x.y.z]` heading, so the heading format is load-bearing.
+      - FUNCTIONALITY.md: internal map. Known stale in places; fix what the change
+        touches, do not rewrite the file.
+      - src/*.ts header comments: the contract of each module.
+
+    Prose style: Simplified Technical English. Short sentences, active voice,
+    plain words, one instruction per sentence. Never use an em dash; use a plain
+    dash. No marketing adjectives.
+
+  lint: |
+    `bun run typecheck` is the gate. The repo has no ESLint and does not want one.
+    Do not add a linter, a formatter config, or a pre-commit hook. Do not
+    reformat code you did not otherwise change.
+
+  push: |
+    Commit subjects only, no body paragraph. Conventional prefix required:
+    feat, fix, style, chore, refactor, docs, test, build, ci. Never add a
+    Co-Authored-By trailer and never credit an agent as an author.
+
+  pr: |
+    Body states what changed and why, the user-visible effect, and the risk. Keep
+    Simplified Technical English, no em dash. Call out explicitly when the change
+    removes a command, renames a keybinding, or changes where files are written,
+    because those break existing habits and scripts.
+
+  ci: |
+    The release workflow triggers on a v* tag and builds an Apple Silicon binary
+    only. Intel and Linux users build from source; that is deliberate. A failing
+    release-notes step usually means package.json and the CHANGELOG heading
+    disagree about the version.
