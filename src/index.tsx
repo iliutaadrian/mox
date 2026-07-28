@@ -3,12 +3,10 @@
 // screen, synchronized output and mouse — no manual escape juggling here.
 //   dev:        bun src/index.tsx           (uses ./config.yaml at the repo root)
 //   installed:  mox                         (uses ~/Documents/mox/config.yaml)
-import { render } from "@opentui/solid";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, basename } from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { App } from "./app.tsx";
 import { maybeBackup } from "./backup.ts";
 import { Store } from "./db.ts";
 import { loadConfig } from "./config.ts";
@@ -17,6 +15,20 @@ import { DATA_DIR, resolveCfgPath, resolveDbPath } from "./paths.ts";
 import pkg from "../package.json";
 
 const args = process.argv.slice(2);
+
+// Safety net for the interactive and one-shot commands: a background IMAP socket
+// error (idle connection dropped by the server) must never tear down the TUI or
+// abort a half-finished `--prefill`. Handlers on each client already evict dead
+// connections; this catches anything that slips through so the app keeps running
+// and the next refresh reconnects.
+//
+// Every path EXCEPT `mox mcp` deliberately. Installed there too it also swallowed
+// the MCP server's startup errors, so `mox mcp` with a malformed config exited 0
+// printing nothing and Claude Code saw a silently dead server.
+if (args[0] !== "mcp") {
+  process.on("uncaughtException", () => {});
+  process.on("unhandledRejection", () => {});
+}
 
 // `mox --version` / `-v`: print the build version and exit. No config needed.
 if (args.includes("--version") || args.includes("-v")) {
@@ -246,7 +258,9 @@ if (args.includes("--prefill")) {
 //
 // mcp.ts stays alive on its stdin listener, which is why the TUI startup sits in
 // the else branch: falling through would paint the interface over a live
-// protocol stream. Nothing may write to stdout before the handoff.
+// protocol stream. Nothing may write to stdout before the handoff, which is why
+// the renderer and the interface are imported inside that branch rather than at
+// the top of this file — on the MCP path no terminal code is ever loaded.
 if (args[0] === "mcp") {
   // Startup failures here reach a machine, not a terminal: Claude Code sees only
   // the exit code and stderr. Report one readable line and a non-zero exit
@@ -258,17 +272,6 @@ if (args[0] === "mcp") {
     process.exit(1);
   }
 } else {
-  // Safety net for the TUI only: a background IMAP socket error (idle connection
-  // dropped by the server) must never tear down the interface. Handlers on each
-  // client already evict dead connections; this catches anything that slips
-  // through so the app keeps running and the next refresh reconnects.
-  //
-  // Scoped to this branch deliberately. Installed globally it also swallowed the
-  // MCP server's startup errors, so `mox mcp` with a malformed config exited 0
-  // printing nothing and Claude Code saw a silently dead server.
-  process.on("uncaughtException", () => {});
-  process.on("unhandledRejection", () => {});
-
   // Snapshot the store before opening the TUI (see ./backup.ts). No-op unless one
   // is due, and best-effort: a full disk or an unwritable folder is reported here
   // and then ignored — it must never keep the client from starting.
@@ -281,5 +284,8 @@ if (args[0] === "mcp") {
   // timer never holds the process open on exit.
   setInterval(() => maybeBackup(dbPath, backupCfg), 60 * 60 * 1000).unref();
 
+  // Literal specifiers, so the bundler still follows both into the standalone build.
+  const { render } = await import("@opentui/solid");
+  const { App } = await import("./app.tsx");
   await render(() => <App dbPath={dbPath} cfgPath={cfgPath} />, { exitOnCtrlC: true });
 }

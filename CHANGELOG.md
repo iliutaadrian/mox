@@ -97,8 +97,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `g` still opens the goto picker (`gg` jumps to the top, `G` to the bottom).
 - Interactive refresh (`r`) now syncs **Sent** alongside INBOX, so replies sent
   from the provider's UI show up locally without a full `mox --prefill`.
-- `s` saves attachments to `./Attachments` (under the directory mox was
-  launched from) instead of `~/Downloads`.
+- `s` saves attachments into an `Attachments/` folder next to the config
+  (`~/Documents/mox` when installed, the repo root in dev) instead of
+  `~/Downloads`. The MCP `download_attachments` tool writes to the same folder,
+  so a server Claude Code spawned inside some other project cannot drop mail
+  attachments into it.
 
 ### Fixed
 - The reading pane no longer scrolls past the end of an email: `j` and the mouse

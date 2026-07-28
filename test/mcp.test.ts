@@ -189,6 +189,50 @@ describe("the server over stdio", () => {
   });
 });
 
+// The shipped entry point: `mox mcp` routes through index.tsx, which is also the
+// TUI's entry. Spawning src/mcp.ts proves nothing about that dispatch — the arg
+// routing, and above all that no terminal code writes a byte to stdout before
+// the protocol takes over (a single stray line breaks the handshake below).
+describe("`mox mcp` through the binary entry point", () => {
+  let fx: ReturnType<typeof makeFixture>;
+  let client: Client;
+
+  beforeEach(async () => {
+    fx = makeFixture();
+    client = new Client({ name: "mox-test", version: "0" });
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath, // bun
+        args: [join(import.meta.dir, "..", "src", "index.tsx"), "mcp"],
+        env: { ...(process.env as Record<string, string>), ...fx.env },
+      }),
+    );
+  });
+  afterEach(async () => {
+    await client.close();
+    rmSync(fx.dir, { recursive: true, force: true });
+  });
+
+  test("completes the handshake and advertises the same tools", async () => {
+    expect(client.getServerVersion()?.name).toBe("mox");
+    const names = (await client.listTools()).tools.map((t) => t.name).sort();
+    expect(names).toEqual([
+      "create_draft",
+      "download_attachments",
+      "get_email",
+      "get_inbox",
+      "search_emails",
+      "set_category",
+      "triage_emails",
+    ]);
+  });
+
+  test("serves a read call over the routed server", async () => {
+    const res = await client.callTool({ name: "get_inbox", arguments: { limit: 3 } });
+    expect(JSON.parse((res.content as { text: string }[])[0]!.text).length).toBe(3);
+  });
+});
+
 describe("done reports real work", () => {
   // A tool Claude drives must not claim more than it changed: unknown ids, and
   // ids that already carry the flag, are not work done.

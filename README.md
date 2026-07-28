@@ -47,7 +47,7 @@ Three honest reasons:
 | 🧹 **One-key triage** | `e` done · `a` archive · `t` trash — each with an inverse (`z`). Multi-select with `space`, then act on the whole batch. Read/unread (`M`/`U`) sync to the server; done is local. |
 | 🔀 **Type-to-filter move** | `m` opens a fuzzy picker over every category — type a few letters, `enter`, done. Same picker powers `g` **goto** for jumping between views. |
 | 🔎 **Live search** | `/` filters the current view as you type, with operators (`from:`, `subject:`, `is:unread`). `n`/`p` jump between unread. |
-| 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — saved under `./Attachments` (single file, or a per-email subfolder). |
+| 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — saved under `Attachments/` next to the config (single file, or a per-email subfolder). |
 | 🤖 **MCP for Claude** | An MCP server lets Claude Code read *and triage* your mail: get the inbox, search, mark done, trash/archive, re-file a whole sender into a category, download attachments, and draft replies for you to send. Local-only actions stay local; server moves are labelled as such. |
 
 <div align="center">
@@ -167,7 +167,7 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | `o` | Open a link: filterable picker over the `[N]` references in the body |
 | `y` | **Copy mode** — `h`/`j`/`k`/`l` move a character cursor (`0`/`$` line ends, `g`/`G` email ends), `y` copies the cursor's line, `v` starts a selection that `y` then copies; or `i` id, `f` sender, `s` subject, `a` the whole email |
 | drag | Select text with the mouse — releasing copies the selection |
-| `s` | Download attachments to `./Attachments` (subfolder if multiple) |
+| `s` | Download attachments to `Attachments/` next to the config (subfolder if multiple) |
 | `e`/`a`/`t` | Done / archive / trash |
 | `z` | Restore (in Trash / Archive / done) |
 | `M` / `U` | Mark read / unread on the server |
@@ -232,11 +232,11 @@ claude mcp add -s user mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts   # from source
 | `triage_emails` | `done`/`undone`, `trash`/`untrash`, `archive`/`unarchive`, `read`/`unread` for one or many ids. |
 | `set_category` | Re-file mail by ids, or **everything from one sender** (`from: "contact@oxigentour.ro"`). |
 | `create_draft` | Compose a reply as a draft. This is the tool for "respond to this email". |
-| `download_attachments` | Fetch one email's files to `./Attachments`. |
+| `download_attachments` | Fetch one email's files to `Attachments/` next to the config. |
 
 **What actually changes where:** `done` and `set_category` are **local only** - they never touch your mail server, which is why they are safe to hand to a model. `trash`, `archive` and `read`/`unread` are **real IMAP moves**, visible in every other client. `create_draft` only appends to your Drafts folder; mox never sends, so you always review and send yourself.
 
-`set_category` matches a sender as an exact address (not a domain), records the change as your own choice so a later `mox --reclassify` cannot undo it, and only accepts categories that exist in your config or approved list. `download_attachments` saves relative to the directory the MCP server was started in, not the project you happen to be chatting about.
+`set_category` matches a sender as an exact address (not a domain), records the change as your own choice so a later `mox --reclassify` cannot undo it, and only accepts categories that exist in your config or approved list. `download_attachments` saves next to your config - `~/Documents/mox/Attachments` for an installed mox, the repo root in a dev checkout - never into the project you happen to be chatting about, whatever directory Claude Code spawned the server in.
 
 ---
 

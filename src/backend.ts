@@ -1,12 +1,13 @@
 // Actions the TUI triggers, run IN-PROCESS (no subprocess). Each returns
 // {ok, out} for the status line. Writes to the server happen only in mark().
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
 import { type Account, type Config } from "./config.ts";
 import { refresh } from "./engine.ts";
 import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders, fetchBody, fetchAllAttachments, appendDraft } from "./mail.ts";
+import { resolveCfgPath } from "./paths.ts";
 import { buildDraftMime, replySubject } from "./compose.ts";
 
 export type Result = { ok: boolean; out: string };
@@ -303,10 +304,12 @@ export function backend(store: Store, cfg: Config) {
       }
     },
 
-    // Download a message's attachments to ./Attachments (under the directory
-    // mox was launched from). One file → straight into Attachments; multiple →
-    // a subfolder named after the email so they stay grouped. Name collisions
-    // get " (2)", " (3)" … suffixes.
+    // Download a message's attachments into an `Attachments/` folder next to the
+    // config — ~/Documents/mox for an installed mox, the repo root in dev. Not
+    // process.cwd(): `mox mcp` is spawned by Claude Code with the cwd of whatever
+    // project the user is chatting in, and mail attachments do not belong there.
+    // One file → straight into Attachments; multiple → a subfolder named after
+    // the email so they stay grouped. Name collisions get " (2)", " (3)" … suffixes.
     async download(id: number): Promise<Result> {
       try {
         const row = store.byIds([id])[0];
@@ -330,7 +333,7 @@ export function backend(store: Store, cfg: Config) {
           return dest;
         };
 
-        const base = join(process.cwd(), "Attachments");
+        const base = join(dirname(resolveCfgPath()), "Attachments");
         let outDir = base;
         if (atts.length > 1) {
           // Folder name from the subject (fallback sender), sanitized + trimmed.
@@ -346,7 +349,7 @@ export function backend(store: Store, cfg: Config) {
         }
 
         for (const a of atts) writeFileSync(uniquePath(outDir, a.filename), a.data);
-        const where = atts.length > 1 ? `Attachments/${outDir.slice(base.length + 1)}/` : "Attachments/";
+        const where = `${atts.length > 1 ? outDir : base}/`;
         return { ok: true, out: `downloaded ${atts.length} attachment${atts.length > 1 ? "s" : ""} to ${where}` };
       } catch (e) {
         return { ok: false, out: String(e) };

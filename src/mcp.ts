@@ -157,10 +157,10 @@ server.registerTool(
   {
     title: "Download an email's attachments",
     description:
-      "Fetch every attachment of one email from the server and save it to ./Attachments - " +
-      "relative to the directory this MCP server was started in (the mox checkout, or " +
-      "~/Documents/mox for an installed mox), NOT the project you happen to be chatting about. " +
-      "A single file lands in Attachments/; several go into a subfolder named after the subject. " +
+      "Fetch every attachment of one email from the server and save it to an Attachments/ folder " +
+      "next to the mox config (the mox checkout, or ~/Documents/mox for an installed mox), NOT " +
+      "the directory this server was started in and NOT the project you happen to be chatting " +
+      "about. A single file lands in Attachments/; several go into a subfolder named after the subject. " +
       "Reports what it saved, or \"no attachments\" if the message carries none.",
     inputSchema: { id: z.number().int() },
   },

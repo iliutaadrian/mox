@@ -6,13 +6,17 @@
 # Required for the commands and agent keys below to be honored at all.
 allow_repo_commands: true
 
-# Pipeline agent. claude and codex are the only agents that neutralize this
-# repo's CLAUDE.md, so the gate refuses to launch any other one here.
+# Pipeline agent for every step.
 agent: claude
 
 # The gate passes no model flag, so the model comes from the agent's own setting
-# sources. Allowing project settings is the only way to pin one per repo; it also
-# admits this repo's CLAUDE.md and .claude/settings.json into every step.
+# sources. Allowing project settings is the only way to pin one per repo: it
+# admits .claude/settings.json (model: claude-opus-5) into every step. This repo
+# ships no CLAUDE.md, so that file is the whole of what a step inherits.
+#
+# .claude/settings.json is tracked on purpose - the pin has to travel with the
+# repo for the gate to see it. Note the side effect: it also applies to any
+# Claude Code session anyone opens in this checkout, not only to gate steps.
 disable_project_settings: false
 
 commands:
