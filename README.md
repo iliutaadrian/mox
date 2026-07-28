@@ -14,7 +14,7 @@
 
 <img src="docs/demo.gif" width="820" alt="Demo: jump INBOX → ALL → Work with the goto picker, mark an email done so it leaves the inbox, then restore it from ALL">
 
-*`g` jumps between views · `e` marks an email done (it leaves the inbox) · `u` restores it — all keyboard, all local.*
+*`g` jumps between views · `e` marks an email done (it leaves the inbox) · `z` restores it — all keyboard, all local.*
 
 </div>
 
@@ -31,7 +31,7 @@ Three honest reasons:
 <div align="center">
 <img src="docs/reading.png" width="760" alt="Reading pane: headers, category tag, plain-text body; footer shows scroll / prev-next / html / done / archive / trash keys">
 
-*Open anything with `enter`. `v` opens the full HTML in your browser; `s` saves attachments.*
+*Open anything with `enter`. `v` opens the full HTML in your browser; `s` downloads attachments.*
 </div>
 
 ---
@@ -43,11 +43,12 @@ Three honest reasons:
 | 🗂 **Category sidebar** | New mail is filed into a category on fetch. The sidebar shows **INBOX** (active mail only), **Mailboxes** (ALL + per-account), your **Filters** (categories), and server **Folders** (Sent / Spam / Archived / Trash) — each with a live count. |
 | ⚡ **Rule-based, instant** | Filing is deterministic: the first category whose `match` claims a message wins (`domains`, `addresses`, or subject/sender `words`). No AI, no API key, no network round-trip. Order in the config *is* precedence. Edit the rules and run `mox --reclassify` to re-file existing mail — adds re-file, removals fall back to Uncategorized. |
 | 🔒 **Local by construction** | Categories and the local-only **done** state live only in your SQLite DB. mox never writes labels/folders to the server. Delete `~/Documents/mox` and it never happened. |
-| 🧹 **One-key triage** | `e` done · `a` archive · `d` trash — each with an inverse (`u`). Multi-select with `space`, then act on the whole batch. Read/unread (`M`/`U`) sync to the server; done is local. |
+| 💾 **Backed up on a schedule** | Because that database is the only copy of your categories and done state, mox snapshots it to `backup/` every 12 hours (configurable, keeps the last 2) using SQLite's `VACUUM INTO`. |
+| 🧹 **One-key triage** | `e` done · `a` archive · `t` trash — each with an inverse (`z`). Multi-select with `space`, then act on the whole batch. Read/unread (`M`/`U`) sync to the server; done is local. |
 | 🔀 **Type-to-filter move** | `m` opens a fuzzy picker over every category — type a few letters, `enter`, done. Same picker powers `g` **goto** for jumping between views. |
 | 🔎 **Live search** | `/` filters the current view as you type, with operators (`from:`, `subject:`, `is:unread`). `n`/`p` jump between unread. |
-| 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — single file or a per-email subfolder. |
-| 🤖 **MCP for Claude** | A read-only MCP server exposes `search` / `get` / `list` / `stats` over your mail, so Claude Code can sort the leftovers or answer "what did the bank send last week?" without touching your server. |
+| 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — saved under `./Attachments` (single file, or a per-email subfolder). |
+| 🤖 **MCP for Claude** | An MCP server lets Claude Code read *and triage* your mail: get the inbox, search, mark done, trash/archive, re-file a whole sender into a category, download attachments, and draft replies for you to send. Local-only actions stay local; server moves are labelled as such. |
 
 <div align="center">
 <img src="docs/move.png" width="380" alt="Move picker: type-to-filter list of categories, Finance highlighted"> <img src="docs/goto.png" width="380" alt="Goto picker: full list of views with counts to jump to">
@@ -99,6 +100,18 @@ $EDITOR ~/Documents/mox/config.yaml
 
 Running from source uses `./config.yaml` at the repo root instead. Lookup order: `$MOX_CONFIG` → `./config.yaml` (dev) → `~/Documents/mox/config.yaml`. The SQLite store sits beside it (`$MOX_DB` overrides). For Gmail/Yahoo, use an **App Password**, not your account password.
 
+### Backups
+
+Your categories, the local-only **done** flag and snooze times exist *only* in that SQLite file - they are never mirrored to the mail server, so a lost database cannot be re-synced. mox therefore snapshots it into a `backup/` folder next to the database (`~/Documents/mox/backup/` installed, the repo root in dev):
+
+```yaml
+backup_enabled: true      # off only if you write exactly `false`
+backup_every_hours: 12    # a snapshot is taken when the newest one is older than this
+backup_keep: 2            # older snapshots are pruned
+```
+
+A snapshot is taken at startup when one is due, and re-checked hourly so a session left open for days keeps snapshotting. Snapshots are written with SQLite's `VACUUM INTO`, not by copying files - the store runs in WAL mode, where a plain copy can silently miss recent writes. A failed backup (full disk, unwritable folder) is reported and then ignored; it never stops mox from opening.
+
 Categories are matched top-to-bottom; the first `match` that claims a message wins, so **order is precedence**:
 
 ```yaml
@@ -127,12 +140,14 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | --- | --- |
 | `enter` | Open the highlighted email |
 | `j`/`k` (↑↓) | Move cursor / scroll |
+| `d` / `u` | Half-page down / up (whichever pane has focus) |
 | `tab` / `h` `l` | Switch focus between sidebar and list |
 | `space` | Select / deselect (multi-select) |
 | `e` | **Done** — hide from INBOX (local only) |
-| `a` / `d` | **Archive** / **Trash** on the server |
-| `u` | **Restore** — undone / unarchive / untrash |
+| `a` / `t` | **Archive** / **Trash** on the server |
+| `z` | **Restore** — undone / unarchive / untrash |
 | `m` | Move the selection to a category |
+| `y` | **Copy** — then `i` id, `f` sender address, `s` subject, `a` row (works on the whole multi-selection) |
 | `g` | **Goto** — jump to any view |
 | `M` / `U` | Mark read / unread **on the server** |
 | `n` / `p` | Next / previous unread |
@@ -145,11 +160,16 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | Key | Action |
 | --- | --- |
 | `j` / `k` | Scroll the email |
+| `d` / `u` | Half-page down / up |
+| `g` / `G` | Jump to the start / end of the email |
 | `h` / `l` | Previous / next email |
 | `v` | Open the full HTML email in the browser |
-| `s` | Save attachments (subfolder if multiple) |
-| `e`/`a`/`d` | Done / archive / trash |
-| `u` | Restore (in Trash / Archive / done) |
+| `o` | Open a link: filterable picker over the `[N]` references in the body |
+| `y` | **Copy mode** — `h`/`j`/`k`/`l` move a character cursor (`0`/`$` line ends, `g`/`G` email ends), `y` copies the cursor's line, `v` starts a selection that `y` then copies; or `i` id, `f` sender, `s` subject, `a` the whole email |
+| drag | Select text with the mouse — releasing copies the selection |
+| `s` | Download attachments to `./Attachments` (subfolder if multiple) |
+| `e`/`a`/`t` | Done / archive / trash |
+| `z` | Restore (in Trash / Archive / done) |
 | `M` / `U` | Mark read / unread on the server |
 | `esc` / `q` | Back to the list |
 
@@ -157,7 +177,7 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 
 ## Refresh & headless
 
-`r` refreshes **INBOX** over pooled, pre-warmed IMAP connections and reconciles **Trash/Archive** (drops local rows removed on the server). Deeper syncs run headless:
+`r` refreshes **INBOX + Sent** over pooled, pre-warmed IMAP connections and reconciles **Trash/Archive** (drops local rows removed on the server). Deeper syncs run headless:
 
 ```bash
 mox --version                       # print the installed version
@@ -169,6 +189,25 @@ mox --reclassify                    # re-file the whole inbox against the curren
 mox --stats                         # print a snapshot of downloaded/offline mail
 bun src/cli.ts sync                 # fetch ALL folders + rule-file, then exit
 bun src/cli.ts attach <id> [name]   # download an attachment on demand
+bun src/cli.ts draft --reply-to <id> --body-file letter.txt
+                                    # compose a draft into the account's IMAP
+                                    #   Drafts folder (reply or standalone)
+```
+
+### Drafts (compose without sending)
+
+mox has **no SMTP on purpose**: `draft` composes a nicely formatted message (plain text + generated HTML, UTF-8 safe) and appends it to the account's **IMAP Drafts folder**. You review and hit Send from your provider's own UI (webmail / phone app), so nothing ever leaves the machine unseen.
+
+```bash
+# reply to a stored message — account, To and "Re: …" subject are derived,
+# In-Reply-To/References thread it under the original
+bun src/cli.ts draft --reply-to 31606 --body-file letter.txt
+
+# standalone
+bun src/cli.ts draft --account Personal --to who@example.com \
+  --subject "Hello" --body "First paragraph.
+
+Second paragraph."
 ```
 
 A normal launch only pulls the most recent `fetch_limit` messages with full content. `mox --prefill` additionally sweeps **envelope-only metadata** over every older INBOX message (so the whole inbox is searchable offline; bodies fetch on demand when opened), and caches full bodies for the `offline_categories`.
@@ -189,13 +228,27 @@ curl -fsSL https://raw.githubusercontent.com/iliutaadrian/mox/main/install.sh | 
 
 ## Claude / MCP
 
-mox ships a **read-only** MCP server (`search` / `get` / `list` / `stats`) so Claude Code can query your mail as first-class tools. Register it once:
+mox ships an MCP server so Claude Code can read *and triage* your mail as first-class tools. Register it once:
 
 ```bash
 claude mcp add mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
 ```
 
-It reads the same config/DB as the TUI and never writes to your mailbox.
+It reads the same config and database as the TUI.
+
+| Tool | What it does |
+| --- | --- |
+| `get_inbox` | The active, not-yet-triaged mail (respects `inbox_exclude`), newest first. `unread_only` optional. |
+| `search_emails` | Full-text search with the same operators as `/` in the TUI. |
+| `get_email` | Full headers, body and HTML for one id. |
+| `triage_emails` | `done`/`undone`, `trash`/`untrash`, `archive`/`unarchive`, `read`/`unread` for one or many ids. |
+| `set_category` | Re-file mail by ids, or **everything from one sender** (`from: "contact@oxigentour.ro"`). |
+| `create_draft` | Compose a reply as a draft. This is the tool for "respond to this email". |
+| `download_attachments` | Fetch one email's files to `./Attachments`. |
+
+**What actually changes where:** `done` and `set_category` are **local only** - they never touch your mail server, which is why they are safe to hand to a model. `trash`, `archive` and `read`/`unread` are **real IMAP moves**, visible in every other client. `create_draft` only appends to your Drafts folder; mox never sends, so you always review and send yourself.
+
+`set_category` matches a sender as an exact address (not a domain), records the change as your own choice so a later `mox --reclassify` cannot undo it, and only accepts categories that exist in your config or approved list. `download_attachments` saves relative to the directory the MCP server was started in, not the project you happen to be chatting about.
 
 ---
 
@@ -218,12 +271,38 @@ IMAP ──▶ local SQLite (body + html + local category/done columns)
 | `src/db.ts` | `bun:sqlite` store; category/done are local-only columns |
 | `src/mail.ts` | `imapflow` fetch + `mailparser`; pooled connections; server moves |
 | `src/engine.ts` | fetch → rule-file → persist |
-| `src/backend.ts` | in-process actions (sync/mark/move/archive/trash + inverses) |
+| `src/backend.ts` | in-process actions (sync/mark/move/archive/trash + inverses, draft) |
+| `src/compose.ts` | draft MIME builder (plain + HTML multipart, RFC 2047 headers) |
 | `src/app.tsx` | OpenTUI/Solid interface |
-| `src/cli.ts` | headless entry (`sync`, `attach`) |
-| `src/mcp.ts` | read-only MCP server for Claude |
+| `src/cli.ts` | headless entry (`sync`, `attach`, `draft`) |
+| `src/mcp.ts` | MCP server for Claude (queries + `create_draft`) |
 
 Built with [OpenTUI](https://github.com/anomalyco/opentui) + [Solid](https://www.solidjs.com) on [Bun](https://bun.sh).
+
+---
+
+## Tests
+
+```bash
+bun run check          # typecheck + the whole suite (~7s)
+bun run test           # everything
+bun run test:unit      # pure logic only, no rendering
+bun run test:e2e       # the TUI, driven end to end
+```
+
+The end-to-end tests mount the **real `<App/>`** in OpenTUI's in-process test
+renderer (`testRender`) and drive it with real key and mouse events — opening
+mail, paging, searching, the link picker, copy mode, even a mouse drag that
+copies to the system clipboard — then assert on the painted screen
+(`test/helpers/tui.ts`). No terminal emulator and no `pty` is involved, so they
+run headless in about six seconds.
+
+Every test builds a throwaway mailbox: a temp config plus a temp SQLite store
+seeded with synthetic mail, whose account points at an unroutable host
+(`test/helpers/fixture.ts`). **The suite never reads or writes your real
+mailbox**, and it restores your clipboard when it finishes. Actions that need a
+live IMAP connection (`t` trash, `a` archive) are therefore covered at the store
+layer rather than in the UI.
 
 <sub>Screenshots are rendered from a **fictional** demo mailbox — regenerate with `bun docs/demo/seed.ts` and `vhs docs/tapes/<view>.tape`.</sub>
 

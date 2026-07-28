@@ -6,6 +6,90 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Draft composing without SMTP: `cli.ts draft` and the MCP `create_draft` tool
+  build a nicely formatted message (plain text + generated HTML, UTF-8-safe
+  headers/body) and append it to the account's IMAP Drafts folder with `\Draft`.
+  Either a threaded reply to a stored message (`--reply-to <id>` derives the
+  account, To and `Re:` subject, and sets In-Reply-To/References) or standalone
+  (`--account/--to/--subject`). mox never sends — drafts are reviewed and sent
+  from the provider's own UI.
+- `Store.full()` now exposes the message's `message_id` (used for reply threading).
+
+### Added (copy mode)
+- Copy mode (`y`) with a real system-clipboard write (`pbcopy`, or
+  `wl-copy`/`xclip`/`xsel` elsewhere). In the reader it puts a character cursor
+  on the pane: `h`/`j`/`k`/`l` move it, `0`/`$` and `g`/`G` jump to the ends;
+  `y` copies the cursor's line, and `v` starts a selection that `y` then copies
+  (character-precise, across lines).
+- Mouse drag selects text in the reader and copies it on release — no mode to
+  enter. Selections are rendered by OpenTUI itself, so the highlight is exactly
+  what lands on the clipboard; trailing pane padding is stripped.
+- One-key field copies work from both the list and the reader: `i` id, `f`
+  sender address, `s` subject, `a` the whole email (or one tab-separated row per
+  message from the list). These act on the multi-selection, so `space`-marking
+  rows then `yi` yields every id, one per line.
+
+### Added (numbered links)
+- Reader link picker (`o`): email bodies render with lynx's `[N]` link
+  references inline (no more raw URL dump at the bottom), and `o` opens a
+  filterable picker over them - type the number, label text or domain, enter
+  opens the link in the browser. Tracking-looking links are tagged. Plain-text
+  emails get the same treatment by numbering their bare URLs. Shared logic
+  lives in `src/links.ts`.
+
+### Added (MCP actions)
+- The MCP server can now triage mail, not just read it: `get_inbox` (active
+  undone mail), `triage_emails` (done/undone, trash/untrash, archive/unarchive,
+  read/unread over one or many ids), `set_category` (by ids, or every message
+  from one sender), and `download_attachments`. `create_draft` is retitled and
+  reworded so "respond to this email" reaches for it.
+- Tool descriptions state which actions are local-only (`done`, category) and
+  which are real IMAP moves (trash, archive, read/unread), so a model driving
+  them cannot confuse the two.
+- `Store.setCategoryBySender()` and `backend().done()` / `backend().moveBySender()`
+  back these; `setDone()` now returns how many rows actually changed so a tool
+  reports real work instead of the size of the id list it was handed.
+
+### Added (backups)
+- Scheduled snapshots of the SQLite store into a `backup/` folder next to the
+  database, written with `VACUUM INTO` (a file copy of a WAL database can miss
+  recent writes). Configurable via `backup_enabled` / `backup_every_hours` /
+  `backup_keep` (defaults: on, 12 hours, keep 2). The schedule is stateless - it
+  compares the newest existing snapshot's timestamp - so it survives restarts,
+  and a failed backup never blocks the app from starting.
+
+### Added (tests)
+- A test suite: `bun run check` (typecheck + tests, ~7s), `bun run test:unit`,
+  `bun run test:e2e`. 86 tests over the store, width/copy helpers, draft MIME,
+  numbered links, and the TUI itself.
+- The end-to-end tests mount the real `<App/>` in OpenTUI's in-process test
+  renderer and drive it with real key and mouse events, asserting on the painted
+  screen (`test/helpers/tui.ts`). Each test runs against a throwaway fixture
+  mailbox pointed at an unroutable host (`test/helpers/fixture.ts`), so the suite
+  never touches the real mailbox.
+- `tidyCopy()` moved into `src/text.ts` so the copy-padding rule is unit-tested;
+  it now also preserves a selection that is entirely whitespace.
+
+### Removed
+- MCP `list_emails` and `email_stats` tools; `search_emails` covers both
+  (`in:` and category filters) and the surface stays smaller.
+
+### Changed
+- Keybindings: **trash moved from `d` to `t`** and **restore from `u` to `z`**,
+  freeing `d`/`u` for half-page down/up in both the list and the reader. The
+  reader also gained `g`/`G` to jump to the start/end of an email. In the list
+  `g` still opens the goto picker (`gg` jumps to the top, `G` to the bottom).
+- Interactive refresh (`r`) now syncs **Sent** alongside INBOX, so replies sent
+  from the provider's UI show up locally without a full `cli sync`.
+- `s` saves attachments to `./Attachments` (under the directory mox was
+  launched from) instead of `~/Downloads`.
+
+### Fixed
+- The reading pane no longer scrolls past the end of an email: `j` and the mouse
+  wheel stop once the last line (the References tail, when there is one) is on
+  screen, instead of running the content off into blank space.
+
 ## [1.3.0] - 2026-07-23
 
 ### Added

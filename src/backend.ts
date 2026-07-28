@@ -1,15 +1,23 @@
 // Actions the TUI triggers, run IN-PROCESS (no subprocess). Each returns
 // {ok, out} for the status line. Writes to the server happen only in mark().
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
 import { type Account, type Config } from "./config.ts";
 import { refresh } from "./engine.ts";
-import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders, fetchBody, fetchAllAttachments } from "./mail.ts";
+import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders, fetchBody, fetchAllAttachments, appendDraft } from "./mail.ts";
+import { buildDraftMime, replySubject } from "./compose.ts";
 
 export type Result = { ok: boolean; out: string };
+
+export type DraftParams = {
+  body: string; // plain text; blank lines separate paragraphs
+  replyTo?: number; // local message id — derives account/to/subject/threading
+  account?: string; // standalone: which account to draft from (default: first)
+  to?: string; // standalone: required; reply: overrides the original sender
+  subject?: string; // standalone: required; reply: overrides "Re: <original>"
+};
 
 function accByName(cfg: Config): Map<string, Account> {
   return new Map(cfg.accounts.map((a) => [a.name, a]));
@@ -28,7 +36,7 @@ async function folderName(cache: Map<string, Map<string, string>>, acc: Account,
 
 export function backend(store: Store, cfg: Config) {
   return {
-    // Interactive refresh: INBOX only (fast). Folders sync via `cli sync`.
+    // Interactive refresh: INBOX + Sent (fast). Other folders sync via `cli sync`.
     async sync(): Promise<Result> {
       try {
         const { fetched, filed } = await refresh(store, cfg, true);
@@ -69,6 +77,21 @@ export function backend(store: Store, cfg: Config) {
           n += g.uids.length;
         }
         return { ok: true, out: `marked ${n} ${seen ? "read" : "unread"}` };
+      } catch (e) {
+        return { ok: false, out: String(e) };
+      }
+    },
+
+    // Local-only "archive": done mail drops out of the INBOX view, and the
+    // server never hears about it. Lives here so the TUI and the MCP server
+    // share one implementation (and one wording for the status line).
+    done(ids: number[], done: boolean): Result {
+      try {
+        // Report rows actually flipped: an id that does not exist (or already
+        // has the flag) is not work done, and a tool driven by Claude must not
+        // claim otherwise.
+        const n = store.setDone(ids, done);
+        return { ok: true, out: done ? `done ${n}` : `restored ${n} to inbox` };
       } catch (e) {
         return { ok: false, out: String(e) };
       }
@@ -221,6 +244,51 @@ export function backend(store: Store, cfg: Config) {
       }
     },
 
+    // Bulk move(): every INBOX message from one exact sender address. Same
+    // local-only category write, so it too survives `mox --reclassify`.
+    moveBySender(addr: string, category: string): Result {
+      try {
+        const n = store.setCategoryBySender(addr, category);
+        return { ok: true, out: n > 0 ? `moved ${n} from ${addr} to ${category}` : `no mail from ${addr}` };
+      } catch (e) {
+        return { ok: false, out: String(e) };
+      }
+    },
+
+    // Compose a draft and append it to the account's IMAP Drafts folder (mox
+    // never sends — review + send happens in the provider's own UI). Either a
+    // reply to a stored message (replyTo threads via In-Reply-To/References)
+    // or standalone (account/to/subject given explicitly).
+    async draft(p: DraftParams): Promise<Result> {
+      try {
+        if (!p.body?.trim()) return { ok: false, out: "draft body is empty" };
+        const accs = accByName(cfg);
+        let acc: Account | undefined;
+        let to = p.to ?? "";
+        let subject = p.subject ?? "";
+        let inReplyTo: string | undefined;
+        if (p.replyTo != null) {
+          const orig = store.full(p.replyTo);
+          if (!orig) return { ok: false, out: `message ${p.replyTo} not found` };
+          acc = accs.get(orig.account);
+          if (!acc) return { ok: false, out: `account ${orig.account} not in config` };
+          to ||= orig.from_addr;
+          subject ||= replySubject(orig.subject);
+          inReplyTo = orig.message_id || undefined;
+        } else {
+          acc = p.account ? accs.get(p.account) : cfg.accounts[0];
+          if (!acc) return { ok: false, out: `account ${p.account ?? "(none)"} not in config` };
+          if (!to) return { ok: false, out: "standalone draft needs a to address" };
+          if (!subject) return { ok: false, out: "standalone draft needs a subject" };
+        }
+        const mime = buildDraftMime({ from: acc.imapUser, to, subject, text: p.body, inReplyTo });
+        const { folder } = await appendDraft(acc, mime);
+        return { ok: true, out: `draft "${subject}" saved to ${acc.name}/${folder} — send it from your mail app` };
+      } catch (e) {
+        return { ok: false, out: String(e) };
+      }
+    },
+
     // Fetch a message's body/html on demand (older mail keeps only metadata).
     async body(id: number): Promise<{ ok: boolean; body: string; html: string }> {
       try {
@@ -235,9 +303,10 @@ export function backend(store: Store, cfg: Config) {
       }
     },
 
-    // Download a message's attachments to ~/Downloads. One file → straight into
-    // Downloads; multiple → a subfolder named after the email so they stay
-    // grouped. Name collisions get " (2)", " (3)" … suffixes.
+    // Download a message's attachments to ./Attachments (under the directory
+    // mox was launched from). One file → straight into Attachments; multiple →
+    // a subfolder named after the email so they stay grouped. Name collisions
+    // get " (2)", " (3)" … suffixes.
     async download(id: number): Promise<Result> {
       try {
         const row = store.byIds([id])[0];
@@ -261,8 +330,8 @@ export function backend(store: Store, cfg: Config) {
           return dest;
         };
 
-        const downloads = join(homedir(), "Downloads");
-        let outDir = downloads;
+        const base = join(process.cwd(), "Attachments");
+        let outDir = base;
         if (atts.length > 1) {
           // Folder name from the subject (fallback sender), sanitized + trimmed.
           const label = (full?.subject?.trim() || full?.from_name || row.account || "email")
@@ -270,15 +339,15 @@ export function backend(store: Store, cfg: Config) {
             .replace(/\s+/g, " ")
             .slice(0, 80)
             .trim();
-          outDir = uniquePath(downloads, label); // reuse collision logic for the dir too
+          outDir = uniquePath(base, label); // reuse collision logic for the dir too
           mkdirSync(outDir, { recursive: true });
         } else {
-          mkdirSync(downloads, { recursive: true });
+          mkdirSync(base, { recursive: true });
         }
 
         for (const a of atts) writeFileSync(uniquePath(outDir, a.filename), a.data);
-        const where = atts.length > 1 ? `~/Downloads/${outDir.slice(downloads.length + 1)}/` : "~/Downloads";
-        return { ok: true, out: `saved ${atts.length} to ${where}` };
+        const where = atts.length > 1 ? `Attachments/${outDir.slice(base.length + 1)}/` : "Attachments/";
+        return { ok: true, out: `downloaded ${atts.length} attachment${atts.length > 1 ? "s" : ""} to ${where}` };
       } catch (e) {
         return { ok: false, out: String(e) };
       }

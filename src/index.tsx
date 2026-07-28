@@ -9,6 +9,7 @@ import { dirname, basename } from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { App } from "./app.tsx";
+import { maybeBackup } from "./backup.ts";
 import { Store } from "./db.ts";
 import { loadConfig } from "./config.ts";
 import { prefill, reclassifyAll } from "./engine.ts";
@@ -238,5 +239,17 @@ if (args.includes("--prefill")) {
   w("\n");
   process.exit(failed.length ? 1 : 0);
 }
+
+// Snapshot the store before opening the TUI (see ./backup.ts). No-op unless one
+// is due, and best-effort: a full disk or an unwritable folder is reported here
+// and then ignored — it must never keep the client from starting.
+const backupCfg = loadConfig(cfgPath);
+const firstBackup = maybeBackup(dbPath, backupCfg);
+if (firstBackup.error) console.warn(`mox: backup skipped — ${firstBackup.error}`);
+
+// A session can stay open for days, so re-check on a long interval too;
+// maybeBackup returns immediately until the schedule comes due. unref so the
+// timer never holds the process open on exit.
+setInterval(() => maybeBackup(dbPath, backupCfg), 60 * 60 * 1000).unref();
 
 await render(() => <App dbPath={dbPath} cfgPath={cfgPath} />, { exitOnCtrlC: true });

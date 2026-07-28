@@ -11,7 +11,7 @@
 import { useKeyboard, useTerminalDimensions, useRenderer } from "@opentui/solid";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
 import { createSignal, createMemo, createEffect, onMount, onCleanup, For, Show, batch } from "solid-js";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +20,9 @@ import { Store, FOLDER_CLASSES, type Filter, type MessageRow } from "./db.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { backend } from "./backend.ts";
 import { warmConnections } from "./mail.ts";
-import { fit, oneLine } from "./text.ts";
+import { fit, oneLine, tidyCopy } from "./text.ts";
+import { renderEmail, filterLinks, type RenderedEmail, type LinkRef } from "./links.ts";
+import { copyToClipboard } from "./clipboard.ts";
 
 const SIDEBAR_W = 26;
 const PAGE = 200; // lazy-load window: rows fetched per view, grown as you scroll down
@@ -101,21 +103,6 @@ function filterOf(e: SideEntry): Filter {
   return { kind: "all", exclude: e.kind === "all" ? e.exclude : [] };
 }
 
-// Render an email to display text: lynx flows the HTML (layout tables → text,
-// links as [N] refs); plain-text body otherwise. Runs once per open (cached).
-function renderEmailBody(html: string, body: string, width: number): string {
-  if (html.trim()) {
-    const l = spawnSync(
-      "lynx",
-      ["-dump", "-force_html", "-nomargins", `-width=${Math.max(40, width)}`, "-assume_charset=utf-8", "-display_charset=utf-8", "-stdin"],
-      { input: html, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-    );
-    if (l.status === 0 && l.stdout.trim()) return l.stdout;
-    if (!body.trim()) return html.replace(/<[^>]+>/g, " ").replace(/\s+\n/g, "\n");
-  }
-  return body;
-}
-
 // Case-insensitive substring filter for picker options (empty query = all).
 function filterOpts(options: string[], query: string): string[] {
   const q = query.trim().toLowerCase();
@@ -153,11 +140,18 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const [focus, setFocus] = createSignal<"sidebar" | "list">("sidebar");
   const [mode, setMode] = createSignal<"list" | "reading">("list");
   const [selected, setSelected] = createSignal<Set<number>>(new Set<number>());
-  const [status, setStatus] = createSignal("Press r to fetch new mail");
+  const [status, setStatusRaw] = createSignal("Press r to fetch new mail");
+  const [statusAt, setStatusAt] = createSignal(0); // epoch ms of the last status change
+  const setStatus = (s: string) =>
+    batch(() => {
+      setStatusRaw(s);
+      setStatusAt(Date.now());
+    });
   const [busy, setBusy] = createSignal(false);
   const [scroll, setScroll] = createSignal(0);
   const [picker, setPicker] = createSignal<{ kind: "move" | "goto"; options: string[]; idx: number; query: string } | null>(null);
   const [search, setSearch] = createSignal<string | null>(null); // committed query
+  const [searchAt, setSearchAt] = createSignal(0); // epoch ms of the last search commit
   const [typing, setTyping] = createSignal(false); // search input active
   const [draft, setDraft] = createSignal("");
   const [lastSync, setLastSync] = createSignal<number>(0); // epoch ms of last successful sync
@@ -223,7 +217,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   onMount(() => {
     let inFlight = false;
     const id = setInterval(async () => {
-      if (inFlight || busy() || typing() || picker() !== null) return;
+      if (inFlight || busy() || typing() || picker() !== null || linkPicker() !== null || copy() !== null) return;
       inFlight = true;
       try {
         const r = await be.sync();
@@ -248,7 +242,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   // renderCache holds the lynx-rendered text per email+width so scrolling is
   // instant and lynx runs once. Both are plain Maps — the component body runs
   // once under Solid, so they persist without a ref wrapper.
-  const renderCache = new Map<string, string>();
+  const renderCache = new Map<string, RenderedEmail>();
   const bodyCache = new Map<number, { body: string; html: string }>();
   const [fetchTick, setFetchTick] = createSignal(0);
 
@@ -267,17 +261,105 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     });
   });
 
-  const readingBody = createMemo(() => {
+  const readingRendered = createMemo<RenderedEmail>(() => {
     const o = opened();
-    if (!o) return "";
+    if (!o) return { body: "", links: [], hiddenCount: 0 };
     fetchTick(); // re-run once the on-demand body arrives
     const c = bodyCache.get(o.id);
     const html = o.html.trim() ? o.html : (c?.html ?? "");
     const body = o.body.trim() ? o.body : (c?.body ?? "");
-    if (!html.trim() && !body.trim()) return c ? "" : "(fetching…)";
+    if (!html.trim() && !body.trim()) return { body: c ? "" : "(fetching…)", links: [], hiddenCount: 0 };
     const key = `${o.id}:${listW()}`;
-    if (!renderCache.has(key)) renderCache.set(key, renderEmailBody(html, body, listW()));
+    if (!renderCache.has(key)) renderCache.set(key, renderEmail(html, body, listW()));
     return renderCache.get(key)!;
+  });
+  const readingBody = createMemo(() => {
+    const r = readingRendered();
+    if (!r.links.length && !r.hiddenCount) return r.body;
+    const summary =
+      `  ${r.links.length} numbered link${r.links.length === 1 ? "" : "s"}` +
+      (r.hiddenCount ? ` · ${r.hiddenCount} hidden link${r.hiddenCount === 1 ? "" : "s"} omitted` : "");
+    return `${r.body.replace(/\s+$/, "")}\n\nReferences\n${summary}${r.links.length ? " · o to open" : ""}`;
+  });
+  // Reader lines (headers + rendered body), unclipped and unfitted: the reading
+  // pane displays a window of these, and copy mode selects over the same array
+  // so what you copy is exactly what you see (minus the width truncation).
+  const readerLines = createMemo<string[]>(() => {
+    const o = opened();
+    if (!o) return [];
+    const atts: { name: string; type: string; size: number }[] = o.attachments ? JSON.parse(o.attachments) : [];
+    const toAddr = cfg.accounts.find((a) => a.name === o.account)?.imapUser ?? "";
+    return [
+      `Id:      ${o.id}`,
+      `Mailbox: ${o.account}`,
+      `From:    ${o.from_name} <${o.from_addr}>`,
+      ...(toAddr ? [`To:      ${toAddr}`] : []),
+      `Subject: ${oneLine(o.subject)}`,
+      `Date:    ${new Date(o.date * 1000).toLocaleString("en-GB")}`,
+      `Category: ${o.category || "Uncategorized"}${o.source ? `  [${o.source}]` : ""}`,
+      ...(o.html.trim() ? ["HTML email — v browser"] : []),
+      ...atts.map((a) => `📎 ${a.name}  ${a.type}  ${(a.size / 1024).toFixed(0)} KB`),
+      "─".repeat(Math.max(10, listW())),
+      "",
+      ...readingBody().split("\n"),
+    ];
+  });
+
+  // Link picker over the open email's [N] references (reading mode, `o`).
+  const [linkPicker, setLinkPicker] = createSignal<{ idx: number; query: string } | null>(null);
+  // Copy mode (`y`). `line === null` is the field-only flavour used from the
+  // list, where there are no reader lines to point at. Otherwise line/col is a
+  // character cursor into readerLines() and `anchor` (when set) is the other
+  // end of an inclusive selection.
+  type Pos = { line: number; col: number };
+  const [copy, setCopy] = createSignal<{ line: number | null; col: number; anchor: Pos | null } | null>(null);
+  // The reading pane's text node. OpenTUI renders selections itself (mouse drag
+  // out of the box, and startSelection/updateSelection for the keyboard), so
+  // this ref is how copy mode paints its cursor and range.
+  let readerRef: { x: number; y: number } | undefined;
+  createEffect(() => {
+    opened(); // changed message or left reading mode → stale line/link state
+    batch(() => {
+      setLinkPicker(null);
+      setCopy(null);
+    });
+    renderer.clearSelection();
+  });
+
+  // Furthest the reader can scroll: the last screenful of the email (headers,
+  // body and the References tail). Without this the pane scrolls off into blank
+  // space past the end of the message.
+  const maxScroll = createMemo(() => Math.max(0, readerLines().length - bodyH()));
+  // `d`/`u` jump half a pane, so a few lines of context survive the jump.
+  const page = () => Math.max(1, Math.floor(bodyH() / 2));
+
+  const lineAt = (i: number) => readerLines()[i] ?? "";
+  const clampCol = (line: number, col: number) => Math.max(0, Math.min(col, Math.max(0, lineAt(line).length - 1)));
+
+  // Push copy mode's cursor/range into OpenTUI's own selection so the terminal
+  // shows it. With no anchor the range is the single cursor cell (a block
+  // cursor); with one it spans anchor..cursor inclusive, hence the +1 on the
+  // trailing end (the native focus cell is exclusive).
+  function paintSelection(c: { line: number | null; col: number; anchor: Pos | null }) {
+    if (c.line === null || !readerRef) return;
+    const cursor: Pos = { line: c.line, col: c.col };
+    const anchor = c.anchor ?? cursor;
+    const forward = cursor.line > anchor.line || (cursor.line === anchor.line && cursor.col >= anchor.col);
+    const from = forward ? anchor : cursor;
+    const to = forward ? cursor : anchor;
+    const x0 = readerRef.x + from.col;
+    const y0 = readerRef.y + (from.line - scroll());
+    const x1 = readerRef.x + to.col + 1; // inclusive → exclusive
+    const y1 = readerRef.y + (to.line - scroll());
+    renderer.startSelection(readerRef as never, x0, y0);
+    renderer.updateSelection(readerRef as never, x1, y1, { finishDragging: true });
+  }
+  createEffect(() => {
+    const c = copy();
+    scroll(); // repaint the selection after a scroll moves the lines
+    // Only pushes; never clears, so a mouse drag (which owns the native
+    // selection directly) is not fought over by this effect.
+    if (c) paintSelection(c);
   });
 
   const targets = (): number[] => {
@@ -372,6 +454,112 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     setStatus("Opened HTML in browser");
   }
 
+  // ----- copy mode (`y`) -----
+  function copyOut(text: string, label: string) {
+    const r = copyToClipboard(tidyCopy(text));
+    batch(() => {
+      setCopy(null);
+      setStatus(r.ok ? `copied ${label}` : `clipboard error: ${r.error.slice(0, 100)}`);
+    });
+    renderer.clearSelection();
+  }
+
+  // Label for free-form copies: short text is quoted back so the status line
+  // confirms exactly what landed on the clipboard.
+  function copiedLabel(text: string): string {
+    const lines = text.split("\n").length;
+    if (lines > 1) return `${lines} lines`;
+    const one = text.trim();
+    return one.length <= 32 ? `"${one}"` : `${one.length} chars`;
+  }
+
+  // Full rows for the copy targets, in the order they appear in the view
+  // (byIds() returns only the sync columns, so read each message properly).
+  const copyRows = () => targets().map((id) => store.full(id)).filter((m) => m !== null);
+
+  // One-key field copies. They act on the multi-selection when there is one, so
+  // `space`-marking a few rows then `yi` yields every id, one per line.
+  function copyField(kind: "id" | "from" | "subject") {
+    const rows = copyRows();
+    if (!rows.length) return;
+    const value = rows
+      .map((r) => (kind === "id" ? String(r.id) : kind === "from" ? r.from_addr : oneLine(r.subject)))
+      .join("\n");
+    const label =
+      rows.length > 1
+        ? `${rows.length} ${kind === "id" ? "ids" : kind === "from" ? "addresses" : "subjects"}`
+        : kind === "id"
+          ? `id ${value}`
+          : kind === "from"
+            ? `address ${value}`
+            : "subject";
+    copyOut(value, label);
+  }
+
+  // `a`: everything. In the reader that's the open email as shown (headers +
+  // body); from the list it's one tab-separated row per target.
+  function copyAll() {
+    if (mode() === "reading" && readerLines().length) {
+      const lines = readerLines();
+      copyOut(lines.join("\n") + "\n", `whole email (${lines.length} lines)`);
+      return;
+    }
+    const rows = copyRows();
+    if (!rows.length) return;
+    const tsv = rows
+      .map((r) => [r.id, r.from_addr, oneLine(r.subject), new Date(r.date * 1000).toISOString()].join("\t"))
+      .join("\n");
+    copyOut(tsv + "\n", rows.length > 1 ? `${rows.length} rows` : "row");
+  }
+
+  // Text between the anchor and the cursor, inclusive on both ends — the same
+  // range paintSelection() highlights, computed from our own state so what is
+  // copied always matches what is shown.
+  function selectionText(c: { line: number | null; col: number; anchor: Pos | null }): string {
+    if (c.line === null) return "";
+    const cursor: Pos = { line: c.line, col: c.col };
+    const anchor = c.anchor ?? cursor;
+    const forward = cursor.line > anchor.line || (cursor.line === anchor.line && cursor.col >= anchor.col);
+    const from = forward ? anchor : cursor;
+    const to = forward ? cursor : anchor;
+    if (from.line === to.line) return lineAt(from.line).slice(from.col, to.col + 1);
+    const out = [lineAt(from.line).slice(from.col)];
+    for (let i = from.line + 1; i < to.line; i++) out.push(lineAt(i));
+    out.push(lineAt(to.line).slice(0, to.col + 1));
+    return out.join("\n");
+  }
+
+  // `y`: the selection when one is open, otherwise the cursor's whole line.
+  function copySelection() {
+    const c = copy();
+    if (!c || c.line === null) return;
+    if (!c.anchor) {
+      const line = lineAt(c.line);
+      copyOut(line + "\n", copiedLabel(line));
+      return;
+    }
+    const text = selectionText(c);
+    if (!text) {
+      setStatus("nothing selected");
+      return;
+    }
+    copyOut(text, copiedLabel(text));
+  }
+
+  // Cursor motions. `to` is a target position; the line is clamped to the email
+  // and the column to that line, and the pane scrolls to keep the cursor shown.
+  function moveCursor(to: Pos) {
+    const c = copy();
+    if (!c || c.line === null) return;
+    const line = Math.max(0, Math.min(to.line, Math.max(0, readerLines().length - 1)));
+    const col = clampCol(line, to.col);
+    batch(() => {
+      setCopy({ ...c, line, col });
+      setScroll((top) => follow(line, top, bodyH()));
+    });
+  }
+
+
   function markDone(ids: number[], done: boolean, msg: string) {
     store.setDone(ids, done);
     batch(() => {
@@ -397,6 +585,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
           setTyping(false);
           setLimit(PAGE);
           setSearch(d ? d : null);
+          setSearchAt(Date.now());
           setFocus("list");
           moveTo(0);
         });
@@ -442,6 +631,52 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       return;
     }
 
+    if (copy()) {
+      const c = copy()!;
+      const at: Pos = { line: c.line ?? 0, col: c.col };
+      if (name === "escape" || ch === "q") {
+        setCopy(null);
+        renderer.clearSelection();
+      } else if (ch === "j" || name === "down") moveCursor({ ...at, line: at.line + 1 });
+      else if (ch === "k" || name === "up") moveCursor({ ...at, line: at.line - 1 });
+      else if (ch === "l" || name === "right") moveCursor({ ...at, col: at.col + 1 });
+      else if (ch === "h" || name === "left") moveCursor({ ...at, col: at.col - 1 });
+      else if (ch === "0") moveCursor({ ...at, col: 0 });
+      else if (ch === "$") moveCursor({ ...at, col: Number.MAX_SAFE_INTEGER });
+      else if (ch === "g") moveCursor({ line: 0, col: 0 });
+      else if (ch === "G") moveCursor({ line: readerLines().length - 1, col: 0 });
+      else if (ch === "v" && c.line !== null) setCopy({ ...c, anchor: c.anchor ? null : { ...at } });
+      else if (ch === "y" || name === "return" || name === "enter") {
+        if (c.line !== null) copySelection();
+        else copyAll();
+      } else if (ch === "i") copyField("id");
+      else if (ch === "f") copyField("from");
+      else if (ch === "s") copyField("subject");
+      else if (ch === "a") copyAll();
+      return;
+    }
+
+    if (linkPicker()) {
+      const p = linkPicker()!;
+      const filtered = filterLinks(readingRendered().links, p.query);
+      if (name === "escape") setLinkPicker(null);
+      else if (name === "down") setLinkPicker({ ...p, idx: Math.min(p.idx + 1, Math.max(0, filtered.length - 1)) });
+      else if (name === "up") setLinkPicker({ ...p, idx: Math.max(0, p.idx - 1) });
+      else if (name === "return" || name === "enter") {
+        const link = filtered[p.idx];
+        if (link) {
+          spawn("open", [link.url], { stdio: "ignore", detached: true }).unref();
+          setLinkPicker(null);
+          setStatus(`Opened [${link.number}] ${link.host}`);
+        }
+      } else if (name === "backspace" || name === "delete") {
+        setLinkPicker({ idx: 0, query: p.query.slice(0, -1) });
+      } else if (ch && ch.length === 1 && ch >= " " && !e.ctrl && !e.meta) {
+        setLinkPicker({ idx: 0, query: p.query + ch });
+      }
+      return;
+    }
+
     if (mode() === "reading") {
       const c = current();
       if (name === "escape" || ch === "q" || name === "backspace") {
@@ -450,13 +685,22 @@ export function App(props: { dbPath: string; cfgPath: string }) {
           setScroll(0);
         });
       } else if (ch === "j" || name === "down") {
-        setScroll((s) => s + 1); // scroll the open email, not next/prev message
+        setScroll((s) => Math.min(s + 1, maxScroll())); // scroll the email, not to the next one
       } else if (ch === "k" || name === "up") {
         setScroll((s) => Math.max(0, s - 1));
-      } else if (ch === "l" || name === "right") scrollList(1, true); // next email
+      } else if (ch === "d") setScroll((s) => Math.min(s + page(), maxScroll())); // half-page down
+      else if (ch === "u") setScroll((s) => Math.max(0, s - page())); // half-page up
+      else if (ch === "g") setScroll(0); // top of the email
+      else if (ch === "G") setScroll(maxScroll()); // bottom of the email
+      else if (ch === "l" || name === "right") scrollList(1, true); // next email
       else if (ch === "h" || name === "left") scrollList(-1, true); // previous email
       else if (ch === "v") openInBrowser();
-      else if (ch === "s") {
+      else if (ch === "o") {
+        if (readingRendered().links.length) setLinkPicker({ idx: 0, query: "" });
+        else setStatus("no links in this email");
+      } else if (ch === "y") {
+        setCopy({ line: scroll(), col: 0, anchor: null }); // first visible line
+      } else if (ch === "s") {
         if (c) void doBackend("Downloading attachments", () => be.download(c.id));
       } else if (ch === "e") {
         setScroll(0);
@@ -465,10 +709,10 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       } else if (ch === "a") {
         batch(() => { setMode("list"); setScroll(0); });
         void doBackend("Archiving on server", () => be.archive(targets()));
-      } else if (ch === "d") {
+      } else if (ch === "t") {
         batch(() => { setMode("list"); setScroll(0); });
         void doBackend("Trashing on server", () => be.trash(targets()));
-      } else if (ch === "u") {
+      } else if (ch === "z") {
         if (c?.mailbox === "Trash") {
           batch(() => { setMode("list"); setScroll(0); });
           void doBackend("Restoring from Trash", () => be.untrash(targets()));
@@ -522,6 +766,13 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     } else if (ch === "k" || name === "up") {
       if (focus() === "sidebar") moveCat(-1);
       else scrollList(-1);
+    } else if (ch === "d") {
+      // Half-page through whichever pane has focus.
+      if (focus() === "sidebar") for (let i = 0; i < page(); i++) moveCat(1);
+      else moveTo(safeMsgIdx() + page());
+    } else if (ch === "u") {
+      if (focus() === "sidebar") for (let i = 0; i < page(); i++) moveCat(-1);
+      else moveTo(safeMsgIdx() - page());
     } else if (name === "space" && current()) {
       const c = current()!;
       const next = new Set(selected());
@@ -540,8 +791,8 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     else if (ch === "s" && current()) void doBackend("Downloading attachments", () => be.download(current()!.id));
     else if (ch === "e" && targets().length > 0) markDone(targets(), true, `done ${targets().length}`);
     else if (ch === "a" && targets().length > 0) void doBackend("Archiving on server", () => be.archive(targets()));
-    else if (ch === "d" && targets().length > 0) void doBackend("Trashing on server", () => be.trash(targets()));
-    else if (ch === "u" && targets().length > 0) {
+    else if (ch === "t" && targets().length > 0) void doBackend("Trashing on server", () => be.trash(targets()));
+    else if (ch === "z" && targets().length > 0) {
       // Restore: opposite of trash/archive/done depending on where the mail is.
       const c = current();
       if (c?.mailbox === "Trash") void doBackend("Restoring from Trash", () => be.untrash(targets()));
@@ -551,6 +802,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       const cats = [...new Set([...cfg.categories.map((c) => c.name), ...store.approvedCategories()])];
       if (cats.length > 0) setPicker({ kind: "move", options: cats, idx: 0, query: "" });
     } else if (ch === "v") openInBrowser();
+    else if (ch === "y" && current()) setCopy({ line: null, col: 0, anchor: null }); // field copies only
   });
 
   // ----- derived render data -----
@@ -577,13 +829,33 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   // Mouse: per-pane wheel scroll + per-row click. Local handlers avoid all the
   // absolute-coordinate math the old ANSI mouse parser needed.
   const onSidebarScroll = (ev: MouseEvent) => {
-    if (picker() || typing()) return;
+    if (picker() || linkPicker() || copy() || typing()) return;
     moveCat(ev.scroll?.direction === "up" ? -1 : 1);
   };
+  // Mouse text selection in the reader. OpenTUI does the selecting and the
+  // highlighting; we only note where the press landed and, on release, copy
+  // whatever got selected — drag over a few words and they are on the
+  // clipboard, no mode to enter. A plain click (no movement) just clears.
+  let pressAt: { x: number; y: number } | null = null;
+  const onReaderMouseDown = (ev: MouseEvent) => {
+    if (mode() !== "reading" || picker() || linkPicker() || typing()) return;
+    pressAt = { x: ev.x, y: ev.y };
+    setCopy(null); // hand the selection over to the mouse (no clear: it owns it now)
+  };
+  const onReaderMouseUp = (ev: MouseEvent) => {
+    if (mode() !== "reading" || !pressAt) return;
+    const moved = ev.x !== pressAt.x || ev.y !== pressAt.y;
+    pressAt = null;
+    if (!moved) return;
+    const text = renderer.getSelection()?.getSelectedText() ?? "";
+    if (!text.trim()) return;
+    copyOut(text, copiedLabel(text));
+  };
+
   const onListScroll = (ev: MouseEvent) => {
-    if (picker() || typing()) return;
+    if (picker() || linkPicker() || copy() || typing()) return;
     if (mode() === "reading") {
-      setScroll((s) => Math.max(0, s + (ev.scroll?.direction === "up" ? -3 : 3)));
+      setScroll((s) => Math.max(0, Math.min(s + (ev.scroll?.direction === "up" ? -3 : 3), maxScroll())));
     } else scrollList(ev.scroll?.direction === "up" ? -3 : 3);
   };
 
@@ -597,26 +869,36 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   });
   const actionHint = createMemo(() =>
     inTrashOrArchive()
-      ? "u restore"
+      ? "z restore"
       : current()?.done
-        ? "u restore · a archive · d trash"
-        : "e done · a archive · d trash",
+        ? "z restore · a archive · t trash"
+        : "e done · a archive · t trash",
   );
   const hasAtts = createMemo(() => {
     const o = opened();
     return !!o?.attachments && o.attachments !== "" && o.attachments !== "[]";
   });
-  const hint = createMemo(() =>
-    mode() === "reading"
-      ? `j/k scroll · h/l prev/next · v html${hasAtts() ? " · s save" : ""} · ${actionHint()} · M/U read · esc/q back`
-      : `enter open · ${actionHint()} · m move · g goto · n/p unread · / search · r refresh · q quit${selected().size > 0 ? ` · ${selected().size} selected` : ""}`,
-  );
+  const hint = createMemo(() => {
+    const c = copy();
+    if (c) {
+      // Kept under 80 cells so the whole hint survives on a narrow terminal.
+      if (c.line === null) return `COPY · i id · f from · s subj · a row · esc`;
+      return c.anchor
+        ? `COPY · hjkl extend · SELECTING · y copy · esc cancel`
+        : `COPY · hjkl move · v select · y line · i/f/s/a fields · esc`;
+    }
+    return mode() === "reading"
+      ? `j/k scroll · d/u page · g/G ends · h/l prev/next · v html${readingRendered().links.length ? " · o links" : ""} · y copy${hasAtts() ? " · s save files" : ""} · ${actionHint()} · M/U read · esc/q back`
+      : `enter open · ${actionHint()} · d/u page · m move · g goto · y copy · n/p unread · / search · r refresh · q quit${selected().size > 0 ? ` · ${selected().size} selected` : ""}`;
+  });
 
   const headerNote = createMemo(() =>
     typing()
       ? `  /${draft()}▏` + (draft() === "" ? "  from: subj: body: is:unread has:attachment in:sent" : "")
       : search() !== null
-        ? `  search: "${search()}" (${msgs().length}) · esc clear`
+        ? // Keep action feedback visible in search mode: a status produced after
+          // the search was committed (download/archive/…) replaces "esc clear".
+          `  search: "${search()}" (${msgs().length}) · ${statusAt() > searchAt() ? status() : "esc clear"}`
         : "  " + status(),
   );
   const synced = createMemo(() =>
@@ -657,6 +939,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
                   fallback={<text fg={BLUE} attributes={TextAttributes.BOLD}>{fit(`── ${e.label} `, SIDEBAR_W)}</text>}
                 >
                   <text
+                    selectable={false}
                     bg={abs() === safeCatIdx() ? PINK : undefined}
                     fg={abs() === safeCatIdx() ? BLACK : undefined}
                     onMouseDown={() => {
@@ -686,6 +969,8 @@ export function App(props: { dbPath: string; cfgPath: string }) {
           flexDirection="column"
           overflow="hidden"
           onMouseScroll={onListScroll}
+          onMouseDown={onReaderMouseDown}
+          onMouseUp={onReaderMouseUp}
         >
           <Show
             when={mode() === "reading" && opened()}
@@ -723,7 +1008,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
                       <Show
                         when={!cursor()}
                         fallback={
-                          <text bg={PINK} fg={BLACK} onMouseDown={onDown}>
+                          <text selectable={false} bg={PINK} fg={BLACK} onMouseDown={onDown}>
                             {fit(
                               `${selCh()}${doneCh}${readCh}${clip} ${sender} ${cat()}${catW() > 0 ? " " : ""}${subj()} ${date}`,
                               listW(),
@@ -734,7 +1019,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
                         {/* One <text> row with colored <span> segments; the scene
                             graph repaints only the row whose signal changed, so held
                             j/k stays smooth. */}
-                        <text attributes={m.seen ? undefined : TextAttributes.BOLD} onMouseDown={onDown}>
+                        <text selectable={false} attributes={m.seen ? undefined : TextAttributes.BOLD} onMouseDown={onDown}>
                           <Seg fg={PINK} text={selCh()} />
                           <Seg fg={DONE} text={doneCh} />
                           <Seg text={`${readCh}${clip} ${sender} `} />
@@ -752,12 +1037,11 @@ export function App(props: { dbPath: string; cfgPath: string }) {
             }
           >
             <Reading
-              opened={opened()!}
-              toAddr={cfg.accounts.find((a) => a.name === opened()!.account)?.imapUser ?? ""}
-              body={readingBody()}
+              lines={readerLines()}
               scroll={scroll()}
               w={listW()}
               h={bodyH()}
+              ref={(el) => (readerRef = el)}
             />
           </Show>
         </box>
@@ -810,6 +1094,18 @@ export function App(props: { dbPath: string; cfgPath: string }) {
           );
         }}
       </Show>
+
+      <Show when={linkPicker()}>
+        {(p) => (
+          <LinkPicker
+            state={p()}
+            links={filterLinks(readingRendered().links, p().query)}
+            total={readingRendered().links.length}
+            width={dims().width}
+            height={dims().height}
+          />
+        )}
+      </Show>
     </box>
   );
 }
@@ -820,33 +1116,68 @@ function Seg(props: { fg?: string; text: string }) {
   return <span style={{ fg: props.fg } as any}>{props.text}</span>;
 }
 
+// Filterable overlay over the open email's [N] link references: type a number
+// or text to narrow, enter opens the link in the browser.
+function LinkPicker(props: {
+  state: { idx: number; query: string };
+  links: LinkRef[];
+  total: number;
+  width: number;
+  height: number;
+}) {
+  const width = () => Math.max(30, Math.min(92, props.width - 8));
+  const maxItems = () => Math.max(1, Math.min(props.links.length, props.height - 10));
+  const start = () => Math.max(0, Math.min(props.state.idx - Math.floor(maxItems() / 2), props.links.length - maxItems()));
+  const shown = () => props.links.slice(start(), start() + maxItems());
+
+  return (
+    <box
+      position="absolute"
+      left={Math.max(1, Math.floor((props.width - width()) / 2) - 3)}
+      top={Math.max(1, Math.floor((props.height - maxItems() - 8) / 2))}
+      zIndex={10}
+      border
+      borderStyle="rounded"
+      borderColor={PINK}
+      backgroundColor={BLACK}
+      flexDirection="column"
+      paddingLeft={2}
+      paddingRight={2}
+    >
+      <text fg={PINK} attributes={TextAttributes.BOLD}>{`Open numbered link (${props.total})`}</text>
+      <text fg={props.state.query ? BLUE : DIM}>{fit(`/${props.state.query}▏  reference number, label, or domain`, width())}</text>
+      <Show when={props.links.length} fallback={<text fg={DIM}>{fit("no match", width())}</text>}>
+        <For each={shown()}>
+          {(link, index) => {
+            const absolute = () => start() + index();
+            const active = () => absolute() === props.state.idx;
+            return (
+              <text bg={active() ? PINK : undefined} fg={active() ? BLACK : undefined}>
+                {fit(`${active() ? ">" : " "} [${link.number}] ${link.url.replace(/^https?:\/\//i, "")}${link.tracking ? " [tracking]" : ""}`, width())}
+              </text>
+            );
+          }}
+        </For>
+      </Show>
+      <text fg={DIM}>type number/text · ↑/↓ move · enter open in browser · esc</text>
+    </box>
+  );
+}
+
 function Reading(props: {
-  opened: NonNullable<ReturnType<Store["full"]>>;
-  toAddr: string;
-  body: string;
+  lines: string[]; // headers + body, unclipped (built by the App so copy mode shares it)
   scroll: number;
   w: number;
   h: number;
+  ref: (el: { x: number; y: number }) => void;
 }) {
-  const lines = createMemo(() => {
-    const o = props.opened;
-    const atts: { name: string; type: string; size: number }[] = o.attachments ? JSON.parse(o.attachments) : [];
-    const head = [
-      `Mailbox: ${o.account}`,
-      `From:    ${o.from_name} <${o.from_addr}>`,
-      ...(props.toAddr ? [`To:      ${props.toAddr}`] : []),
-      `Subject: ${oneLine(o.subject)}`,
-      `Date:    ${new Date(o.date * 1000).toLocaleString("en-GB")}`,
-      `Category: ${o.category || "Uncategorized"}${o.source ? `  [${o.source}]` : ""}`,
-      ...(o.html.trim() ? ["HTML email — v browser"] : []),
-      ...atts.map((a) => `📎 ${a.name}  ${a.type}  ${(a.size / 1024).toFixed(0)} KB`),
-      "─".repeat(Math.max(10, props.w)),
-      "",
-    ];
-    const body = (props.body || "").split("\n").map((l) => oneLine(l));
-    return [...head, ...body].slice(props.scroll, props.scroll + props.h).map((l) => fit(l, props.w));
-  });
-  // One <text> for the whole pane (joined by \n) — the reading view is a single
-  // node, so scrolling repaints just this text.
-  return <text>{lines().join("\n") || " "}</text>;
+  const rows = createMemo(() => props.lines.slice(props.scroll, props.scroll + props.h).map((l) => fit(oneLine(l), props.w)));
+  // ONE <text> for the whole pane (joined by \n): scrolling repaints a single
+  // node, and it is also the selection surface — OpenTUI selects and highlights
+  // across it for both mouse drags and copy mode's cursor.
+  return (
+    <text ref={props.ref} selectable selectionBg={PINK} selectionFg={BLACK}>
+      {rows().join("\n") || " "}
+    </text>
+  );
 }

@@ -21,7 +21,11 @@
     "typecheck": "tsc --noEmit",
     "build": "bun run scripts/build.ts",
     "install-bin": "bun run build && install -m 0755 dist/mox \"${PREFIX:-$HOME/.local/bin}/mox\" && echo installed to ${PREFIX:-$HOME/.local/bin}/mox",
-    "mcp": "bun src/mcp.ts"
+    "mcp": "bun src/mcp.ts",
+    "test": "bun test --timeout 30000 --preload @opentui/solid/preload",
+    "test:e2e": "bun test --timeout 30000 --preload @opentui/solid/preload test/e2e",
+    "check": "bun run typecheck && bun run test",
+    "test:unit": "bun test test/*.test.ts"
   },
   "devDependencies": {
     "@types/mailparser": "^3.4.6",

@@ -29,7 +29,17 @@ export type Config = {
   contentDays: number; // keep body/html only for mail newer than this; older = metadata-only, fetched on demand
   inboxExclude: string[]; // category names kept OUT of the INBOX view (still in ALL)
   offlineCategories: string[]; // categories whose mail is fully cached offline (bodies never pruned, backfilled)
+  backupEnabled: boolean; // write periodic snapshots of the db into ./backup next to it
+  backupEveryHours: number; // minimum age of the newest backup before another is taken
+  backupKeep: number; // how many backups to keep; older ones are pruned
 };
+
+// A positive number from config, falling back to `def` for missing/garbage/<=0
+// values — a typo must not silently disable backups or fill the disk.
+function positive(v: unknown, def: number): number {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : def;
+}
 
 export function loadConfig(path: string): Config {
   const raw = parse(readFileSync(path, "utf8")) ?? {};
@@ -60,6 +70,9 @@ export function loadConfig(path: string): Config {
     contentDays: Number(raw.content_days ?? 90),
     inboxExclude: (raw.inbox_exclude ?? []).map(String),
     offlineCategories: (raw.offline_categories ?? []).map(String),
+    backupEnabled: raw.backup_enabled !== false, // on unless explicitly disabled
+    backupEveryHours: positive(raw.backup_every_hours, 12),
+    backupKeep: Math.max(1, Math.floor(positive(raw.backup_keep, 2))),
   };
 }
 
