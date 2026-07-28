@@ -10,6 +10,11 @@ allow_repo_commands: true
 # repo's CLAUDE.md, so the gate refuses to launch any other one here.
 agent: claude
 
+# The gate passes no model flag, so the model comes from the agent's own setting
+# sources. Allowing project settings is the only way to pin one per repo; it also
+# admits this repo's CLAUDE.md and .claude/settings.json into every step.
+disable_project_settings: false
+
 commands:
   test: bun run check
   lint: bun run typecheck
