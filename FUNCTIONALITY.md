@@ -29,7 +29,7 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► Ink/React TUI
 | `mouse.ts`   | 59  | SGR mouse tracking (wheel + click), parsed off stdin.                                       |
 | `engine.ts`  | 58  | Fetch orchestration + deterministic rule-filing.                                            |
 | `backup.ts`  | 120 | Scheduled `VACUUM INTO` snapshots of the store into `backup/`, pruned to the newest N.       |
-| `mcp.ts`     | 380 | MCP server: search/read, triage, categorize, download attachments, draft replies.           |
+| `mcp.ts`     | 199 | MCP server: search/read, triage, categorize, download attachments, draft replies.           |
 
 ---
 

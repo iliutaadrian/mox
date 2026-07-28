@@ -65,21 +65,19 @@ if (args[0] === "upgrade") {
   process.exit(r.status ?? 1);
 }
 
-// Safety net: a background IMAP socket error (idle connection dropped by the
-// server) must never crash the TUI. Handlers on each client already evict dead
-// connections; this catches anything that slips through so the app keeps
-// running and the next refresh reconnects.
-process.on("uncaughtException", () => {});
-process.on("unhandledRejection", () => {});
-
 // Locate config + db (shared with mcp.ts). Installed builds keep both
 // in ~/Documents/mox; running from source uses the repo root. See ./paths.ts.
 const cfgPath = resolveCfgPath();
 const dbPath = resolveDbPath(cfgPath);
 
 if (!existsSync(cfgPath)) {
-  mkdirSync(DATA_DIR, { recursive: true });
-  mkdirSync(dirname(cfgPath), { recursive: true });
+  // Best-effort: create the folders so the user has somewhere to drop the config.
+  // An unwritable path (read-only volume, $MOX_CONFIG pointing somewhere absurd)
+  // must still reach the message below rather than dying on a mkdir stack trace.
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    mkdirSync(dirname(cfgPath), { recursive: true });
+  } catch {}
   console.error(
     `no config found — create ${cfgPath} (copy config.example.yaml and edit),\n` +
       `or set $MOX_CONFIG to your config path.`,
@@ -250,8 +248,27 @@ if (args.includes("--prefill")) {
 // the else branch: falling through would paint the interface over a live
 // protocol stream. Nothing may write to stdout before the handoff.
 if (args[0] === "mcp") {
-  await import("./mcp.ts");
+  // Startup failures here reach a machine, not a terminal: Claude Code sees only
+  // the exit code and stderr. Report one readable line and a non-zero exit
+  // instead of a stack trace through the minified bundle.
+  try {
+    await import("./mcp.ts");
+  } catch (e) {
+    console.error(`mox mcp: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
+  }
 } else {
+  // Safety net for the TUI only: a background IMAP socket error (idle connection
+  // dropped by the server) must never tear down the interface. Handlers on each
+  // client already evict dead connections; this catches anything that slips
+  // through so the app keeps running and the next refresh reconnects.
+  //
+  // Scoped to this branch deliberately. Installed globally it also swallowed the
+  // MCP server's startup errors, so `mox mcp` with a malformed config exited 0
+  // printing nothing and Claude Code saw a silently dead server.
+  process.on("uncaughtException", () => {});
+  process.on("unhandledRejection", () => {});
+
   // Snapshot the store before opening the TUI (see ./backup.ts). No-op unless one
   // is due, and best-effort: a full disk or an unwritable folder is reported here
   // and then ignored — it must never keep the client from starting.
