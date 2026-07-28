@@ -64,7 +64,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   recent writes). Configurable via `backup_enabled` / `backup_every_hours` /
   `backup_keep` (defaults: on, 12 hours, keep 2). The schedule is stateless - it
   compares the newest existing snapshot's timestamp - so it survives restarts,
-  and a failed backup never blocks the app from starting.
+  and a failed backup never blocks the app from starting. Every entry point that
+  writes takes the snapshot first: the TUI, `mox mcp`, `mox --reclassify` and
+  `mox --prefill`. The read-only `mox --stats` does not.
 
 ### Added (tests)
 - A test suite: `bun run check` (typecheck + tests, ~7s), `bun run test:unit`,

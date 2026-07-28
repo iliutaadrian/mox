@@ -426,7 +426,7 @@ async function syncOne(
  * folder). With quick, only INBOX + Sent are touched — fast enough for the
  * interactive `r` refresh (Sent stays fresh so replies sent from the provider's
  * UI show up locally); the remaining folders (Spam/Archive/Trash) change rarely
- * and are synced by the headless `cli sync`. */
+ * and are synced by the full sweep behind `mox --prefill`. */
 export async function syncAll(
   store: Store,
   acc: Account,

@@ -19,7 +19,7 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► Ink/React TUI
 
 | File         | LOC | Role                                                                                        |
 | ------------ | --- | ------------------------------------------------------------------------------------------- |
-| `index.tsx`  | 50  | Entry. Alt-screen wrapper, synchronized-output (DEC 2026) frame wrapping, force-clear hook. |
+| `index.tsx`  | 50  | Entry. Resolves config + db, snapshots the store, dispatches the flags (`--version`, `--help`, `upgrade`, `--reclassify`, `--stats`, `--prefill`) and `mox mcp`, else renders the TUI. |
 | `app.tsx`    | 614 | The whole TUI: sidebar, list, reading pane, keybindings, mouse, pickers, search input.      |
 | `db.ts`      | 324 | SQLite store. Schema, migrations, search query builder, all reads/writes.                   |
 | `mail.ts`    | 306 | IMAP layer. Connection pool, UID-incremental sync, folder detection, BODYSTRUCTURE attachment metadata, attachment fetch. |

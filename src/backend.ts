@@ -38,7 +38,7 @@ async function folderName(cache: Map<string, Map<string, string>>, acc: Account,
 
 export function backend(store: Store, cfg: Config) {
   return {
-    // Interactive refresh: INBOX + Sent (fast). Other folders sync via `cli sync`.
+    // Interactive refresh: INBOX + Sent (fast). Other folders sync via `mox --prefill`.
     async sync(): Promise<Result> {
       try {
         const { fetched, filed } = await refresh(store, cfg, true);

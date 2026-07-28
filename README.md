@@ -110,7 +110,7 @@ backup_every_hours: 12    # a snapshot is taken when the newest one is older tha
 backup_keep: 2            # older snapshots are pruned
 ```
 
-A snapshot is taken at startup when one is due, and re-checked hourly so a session left open for days keeps snapshotting. Snapshots are written with SQLite's `VACUUM INTO`, not by copying files - the store runs in WAL mode, where a plain copy can silently miss recent writes. A failed backup (full disk, unwritable folder) is reported and then ignored; it never stops mox from opening.
+A snapshot is taken at startup when one is due, and re-checked hourly so a session left open for days keeps snapshotting. Every command that can write takes one first - the interface, `mox mcp`, `mox --reclassify` and `mox --prefill`. The read-only `mox --stats` does not. Snapshots are written with SQLite's `VACUUM INTO`, not by copying files - the store runs in WAL mode, where a plain copy can silently miss recent writes. A failed backup (full disk, unwritable folder) is reported and then ignored; it never stops mox from opening.
 
 Categories are matched top-to-bottom; the first `match` that claims a message wins, so **order is precedence**:
 
