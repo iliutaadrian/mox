@@ -446,8 +446,8 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     const doc = html.trim()
       ? html
       : `<!doctype html><meta charset=utf-8><pre style="white-space:pre-wrap;font:14px/1.5 system-ui">${body
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")}</pre>`;
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")}</pre>`;
     const p = join(tmpdir(), "mox-preview.html");
     writeFileSync(p, doc);
     spawn("open", [p], { stdio: "ignore", detached: true }).unref();
@@ -897,8 +897,8 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       ? `  /${draft()}▏` + (draft() === "" ? "  from: subj: body: is:unread has:attachment in:sent" : "")
       : search() !== null
         ? // Keep action feedback visible in search mode: a status produced after
-          // the search was committed (download/archive/…) replaces "esc clear".
-          `  search: "${search()}" (${msgs().length}) · ${statusAt() > searchAt() ? status() : "esc clear"}`
+        // the search was committed (download/archive/…) replaces "esc clear".
+        `  search: "${search()}" (${msgs().length}) · ${statusAt() > searchAt() ? status() : "esc clear"}`
         : "  " + status(),
   );
   const synced = createMemo(() =>
