@@ -47,7 +47,7 @@ Three honest reasons:
 | 🧹 **One-key triage** | `e` done · `a` archive · `t` trash — each with an inverse (`z`). Multi-select with `space`, then act on the whole batch. Read/unread (`M`/`U`) sync to the server; done is local. |
 | 🔀 **Type-to-filter move** | `m` opens a fuzzy picker over every category — type a few letters, `enter`, done. Same picker powers `g` **goto** for jumping between views. |
 | 🔎 **Live search** | `/` filters the current view as you type, with operators (`from:`, `subject:`, `is:unread`). `n`/`p` jump between unread. |
-| 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — saved under `./Attachments` (single file, or a per-email subfolder). |
+| 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — saved under `Attachments/` next to the database (single file, or a per-email subfolder). |
 | 🤖 **MCP for Claude** | An MCP server lets Claude Code read *and triage* your mail: get the inbox, search, mark done, trash/archive, re-file a whole sender into a category, download attachments, and draft replies for you to send. Local-only actions stay local; server moves are labelled as such. |
 
 <div align="center">
@@ -110,7 +110,7 @@ backup_every_hours: 12    # a snapshot is taken when the newest one is older tha
 backup_keep: 2            # older snapshots are pruned
 ```
 
-A snapshot is taken at startup when one is due, and re-checked hourly so a session left open for days keeps snapshotting. Snapshots are written with SQLite's `VACUUM INTO`, not by copying files - the store runs in WAL mode, where a plain copy can silently miss recent writes. A failed backup (full disk, unwritable folder) is reported and then ignored; it never stops mox from opening.
+A snapshot is taken at startup when one is due, and re-checked hourly so a session left open for days keeps snapshotting. Every command that can write takes one first - the interface, `mox mcp`, `mox --reclassify` and `mox --prefill`. The read-only `mox --stats` does not. Snapshots are written with SQLite's `VACUUM INTO`, not by copying files - the store runs in WAL mode, where a plain copy can silently miss recent writes. A failed backup (full disk, unwritable folder) is reported and then ignored; it never stops mox from opening.
 
 Categories are matched top-to-bottom; the first `match` that claims a message wins, so **order is precedence**:
 
@@ -167,7 +167,7 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | `o` | Open a link: filterable picker over the `[N]` references in the body |
 | `y` | **Copy mode** — `h`/`j`/`k`/`l` move a character cursor (`0`/`$` line ends, `g`/`G` email ends), `y` copies the cursor's line, `v` starts a selection that `y` then copies; or `i` id, `f` sender, `s` subject, `a` the whole email |
 | drag | Select text with the mouse — releasing copies the selection |
-| `s` | Download attachments to `./Attachments` (subfolder if multiple) |
+| `s` | Download attachments to `Attachments/` next to the database (subfolder if multiple) |
 | `e`/`a`/`t` | Done / archive / trash |
 | `z` | Restore (in Trash / Archive / done) |
 | `M` / `U` | Mark read / unread on the server |
@@ -187,28 +187,15 @@ mox --prefill                       # one-time seed: metadata for the WHOLE inbo
 mox --reclassify                    # re-file the whole inbox against the current
                                     #   config rules (manual moves kept), then exit
 mox --stats                         # print a snapshot of downloaded/offline mail
-bun src/cli.ts sync                 # fetch ALL folders + rule-file, then exit
-bun src/cli.ts attach <id> [name]   # download an attachment on demand
-bun src/cli.ts draft --reply-to <id> --body-file letter.txt
-                                    # compose a draft into the account's IMAP
-                                    #   Drafts folder (reply or standalone)
 ```
+
+Everything above runs on the installed binary. There is no separate CLI to keep in sync: the TUI covers day-to-day work, and anything scripted goes through the MCP tools.
 
 ### Drafts (compose without sending)
 
-mox has **no SMTP on purpose**: `draft` composes a nicely formatted message (plain text + generated HTML, UTF-8 safe) and appends it to the account's **IMAP Drafts folder**. You review and hit Send from your provider's own UI (webmail / phone app), so nothing ever leaves the machine unseen.
+mox has **no SMTP on purpose**: the `create_draft` MCP tool composes a nicely formatted message (plain text + generated HTML, UTF-8 safe) and appends it to the account's **IMAP Drafts folder**. You review and hit Send from your provider's own UI (webmail / phone app), so nothing ever leaves the machine unseen.
 
-```bash
-# reply to a stored message — account, To and "Re: …" subject are derived,
-# In-Reply-To/References thread it under the original
-bun src/cli.ts draft --reply-to 31606 --body-file letter.txt
-
-# standalone
-bun src/cli.ts draft --account Personal --to who@example.com \
-  --subject "Hello" --body "First paragraph.
-
-Second paragraph."
-```
+Ask Claude to reply to a message and it reaches for that tool. A reply derives the account, the To address and the `Re: …` subject from the original, and threads it with In-Reply-To/References. A standalone draft needs an account, a recipient and a subject.
 
 A normal launch only pulls the most recent `fetch_limit` messages with full content. `mox --prefill` additionally sweeps **envelope-only metadata** over every older INBOX message (so the whole inbox is searchable offline; bodies fetch on demand when opened), and caches full bodies for the `offline_categories`.
 
@@ -231,10 +218,13 @@ curl -fsSL https://raw.githubusercontent.com/iliutaadrian/mox/main/install.sh | 
 mox ships an MCP server so Claude Code can read *and triage* your mail as first-class tools. Register it once:
 
 ```bash
-claude mcp add mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
+claude mcp add -s user mox -- mox mcp          # installed binary
+claude mcp add -s user mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts   # from source
 ```
 
-It reads the same config and database as the TUI.
+`-s user` registers the server for every session; the default scope covers only the current project. It reads the same config and database as the TUI, so a `space`-marked row in the interface and an id handed to a tool mean the same message.
+
+Bare `mox mcp` only works if `mox` is on the `PATH` of the process that spawns MCP servers. `install.sh` puts the binary in `~/.local/bin`, which a GUI-launched Claude Code often does not inherit — the server then dies with `ENOENT` and the tools never show up. If that happens, register the absolute path instead (`claude mcp add -s user mox -- /Users/you/.local/bin/mox mcp`).
 
 | Tool | What it does |
 | --- | --- |
@@ -244,11 +234,11 @@ It reads the same config and database as the TUI.
 | `triage_emails` | `done`/`undone`, `trash`/`untrash`, `archive`/`unarchive`, `read`/`unread` for one or many ids. |
 | `set_category` | Re-file mail by ids, or **everything from one sender** (`from: "contact@oxigentour.ro"`). |
 | `create_draft` | Compose a reply as a draft. This is the tool for "respond to this email". |
-| `download_attachments` | Fetch one email's files to `./Attachments`. |
+| `download_attachments` | Fetch one email's files to `Attachments/` next to the database. |
 
 **What actually changes where:** `done` and `set_category` are **local only** - they never touch your mail server, which is why they are safe to hand to a model. `trash`, `archive` and `read`/`unread` are **real IMAP moves**, visible in every other client. `create_draft` only appends to your Drafts folder; mox never sends, so you always review and send yourself.
 
-`set_category` matches a sender as an exact address (not a domain), records the change as your own choice so a later `mox --reclassify` cannot undo it, and only accepts categories that exist in your config or approved list. `download_attachments` saves relative to the directory the MCP server was started in, not the project you happen to be chatting about.
+`set_category` matches a sender as an exact address (not a domain), records the change as your own choice so a later `mox --reclassify` cannot undo it, and only accepts categories that exist in your config or approved list. `download_attachments` saves next to your database - `~/Documents/mox/Attachments` for an installed mox, the repo root in a dev checkout - never into the project you happen to be chatting about, whatever directory Claude Code spawned the server in.
 
 ---
 
@@ -274,8 +264,7 @@ IMAP ──▶ local SQLite (body + html + local category/done columns)
 | `src/backend.ts` | in-process actions (sync/mark/move/archive/trash + inverses, draft) |
 | `src/compose.ts` | draft MIME builder (plain + HTML multipart, RFC 2047 headers) |
 | `src/app.tsx` | OpenTUI/Solid interface |
-| `src/cli.ts` | headless entry (`sync`, `attach`, `draft`) |
-| `src/mcp.ts` | MCP server for Claude (queries + `create_draft`) |
+| `src/mcp.ts` | MCP server for Claude (read + triage + `create_draft`), also reachable as `mox mcp` |
 
 Built with [OpenTUI](https://github.com/anomalyco/opentui) + [Solid](https://www.solidjs.com) on [Bun](https://bun.sh).
 

@@ -426,7 +426,7 @@ async function syncOne(
  * folder). With quick, only INBOX + Sent are touched — fast enough for the
  * interactive `r` refresh (Sent stays fresh so replies sent from the provider's
  * UI show up locally); the remaining folders (Spam/Archive/Trash) change rarely
- * and are synced by the headless `cli sync`. */
+ * and are synced by the full sweep behind `mox --prefill`. */
 export async function syncAll(
   store: Store,
   acc: Account,
@@ -670,7 +670,6 @@ export async function fetchBodies(
   return out;
 }
 
-/** fetchAttachment re-fetches one message's named attachment on demand. */
 /** fetchAllAttachments downloads a message once and returns every attachment
  * (real files only; inline images with no filename are skipped). */
 export async function fetchAllAttachments(
@@ -693,27 +692,3 @@ export async function fetchAllAttachments(
   }
 }
 
-export async function fetchAttachment(
-  acc: Account,
-  imapName: string,
-  uid: number,
-  name: string,
-): Promise<{ data: Buffer; filename: string }> {
-  const client = connect(acc);
-  await client.connect();
-  try {
-    await client.mailboxOpen(imapName, { readOnly: true });
-    const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
-    if (!msg || !msg.source) throw new Error(`uid ${uid} not found`);
-    const p = await simpleParser(msg.source);
-    const atts = p.attachments ?? [];
-    let hit = name ? atts.find((a) => a.filename === name) : atts.length === 1 ? atts[0] : undefined;
-    if (!hit) {
-      if (name) throw new Error(`attachment ${name} not found`);
-      throw new Error(atts.length === 0 ? "message has no attachments" : "multiple attachments; pass a name");
-    }
-    return { data: hit.content as Buffer, filename: hit.filename ?? "attachment" };
-  } finally {
-    await client.logout();
-  }
-}

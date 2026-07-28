@@ -16,6 +16,9 @@ docs/tapes/.out*.gif
 skill-observations/
 fetch.log
 
+# attachments downloaded into a dev checkout (real mail, never commit)
+Attachments/
+
 # sqlite WAL sidecars
 *.db-shm
 *.db-wal

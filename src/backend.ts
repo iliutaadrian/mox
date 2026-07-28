@@ -1,12 +1,14 @@
 // Actions the TUI triggers, run IN-PROCESS (no subprocess). Each returns
 // {ok, out} for the status line. Writes to the server happen only in mark().
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
 import { type Account, type Config } from "./config.ts";
 import { refresh } from "./engine.ts";
 import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders, fetchBody, fetchAllAttachments, appendDraft } from "./mail.ts";
+import { resolveAttachmentsDir, resolveCfgPath } from "./paths.ts";
 import { buildDraftMime, replySubject } from "./compose.ts";
 
 export type Result = { ok: boolean; out: string };
@@ -36,7 +38,7 @@ async function folderName(cache: Map<string, Map<string, string>>, acc: Account,
 
 export function backend(store: Store, cfg: Config) {
   return {
-    // Interactive refresh: INBOX + Sent (fast). Other folders sync via `cli sync`.
+    // Interactive refresh: INBOX + Sent (fast). Other folders sync via `mox --prefill`.
     async sync(): Promise<Result> {
       try {
         const { fetched, filed } = await refresh(store, cfg, true);
@@ -303,10 +305,12 @@ export function backend(store: Store, cfg: Config) {
       }
     },
 
-    // Download a message's attachments to ./Attachments (under the directory
-    // mox was launched from). One file → straight into Attachments; multiple →
-    // a subfolder named after the email so they stay grouped. Name collisions
-    // get " (2)", " (3)" … suffixes.
+    // Download a message's attachments into the `Attachments/` folder beside the
+    // database — ~/Documents/mox for an installed mox, the repo root in dev (see
+    // ./paths.ts). Not process.cwd(): `mox mcp` is spawned by Claude Code with the
+    // cwd of whatever project the user is chatting in, and mail does not belong there.
+    // One file → straight into Attachments; multiple → a subfolder named after
+    // the email so they stay grouped. Name collisions get " (2)", " (3)" … suffixes.
     async download(id: number): Promise<Result> {
       try {
         const row = store.byIds([id])[0];
@@ -330,7 +334,7 @@ export function backend(store: Store, cfg: Config) {
           return dest;
         };
 
-        const base = join(process.cwd(), "Attachments");
+        const base = resolveAttachmentsDir(resolveCfgPath());
         let outDir = base;
         if (atts.length > 1) {
           // Folder name from the subject (fallback sender), sanitized + trimmed.
@@ -346,7 +350,11 @@ export function backend(store: Store, cfg: Config) {
         }
 
         for (const a of atts) writeFileSync(uniquePath(outDir, a.filename), a.data);
-        const where = atts.length > 1 ? `Attachments/${outDir.slice(base.length + 1)}/` : "Attachments/";
+        // Absolute so the MCP caller knows exactly where the files went, but with
+        // $HOME collapsed to ~ so it still fits the TUI's one-line status area.
+        const dir = atts.length > 1 ? outDir : base;
+        const home = homedir();
+        const where = `${dir === home || dir.startsWith(home + "/") ? "~" + dir.slice(home.length) : dir}/`;
         return { ok: true, out: `downloaded ${atts.length} attachment${atts.length > 1 ? "s" : ""} to ${where}` };
       } catch (e) {
         return { ok: false, out: String(e) };

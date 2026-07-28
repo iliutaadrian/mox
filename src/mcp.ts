@@ -5,10 +5,15 @@
 // account's IMAP Drafts folder - mox never sends; drafts are reviewed and sent
 // from the provider's own UI.
 //
-// Register with Claude Code (once):
-//   claude mcp add mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
-// or add to a project .mcp.json. Config/db are located exactly like the TUI
-// ($MOX_CONFIG / repo ./config.yaml / ~/Documents/mox). See ./paths.ts.
+// Register with Claude Code (once). Installed binary:
+//   claude mcp add -s user mox -- mox mcp
+// Dev checkout:
+//   claude mcp add -s user mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
+// `-s user` registers it for every session; the default scope covers only the
+// current project. Bare `mox` must be on the PATH of whatever spawns MCP servers
+// (install.sh targets ~/.local/bin) — register the absolute binary path if it is
+// not. Config/db are located exactly like the TUI ($MOX_CONFIG /
+// repo ./config.yaml / ~/Documents/mox). See ./paths.ts.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -17,6 +22,7 @@ import { Store } from "./db.ts";
 import { loadConfig } from "./config.ts";
 import { backend } from "./backend.ts";
 import { resolveCfgPath, resolveDbPath } from "./paths.ts";
+import pkg from "../package.json";
 
 const cfgPath = resolveCfgPath();
 const dbPath = resolveDbPath(cfgPath);
@@ -24,7 +30,7 @@ const store = new Store(dbPath);
 const cfg = loadConfig(cfgPath);
 const actions = backend(store, cfg);
 
-const server = new McpServer({ name: "mox", version: "1.0.0" });
+const server = new McpServer({ name: "mox", version: pkg.version });
 
 // Categories the user actually curates: config.yaml plus the ones approved in
 // the TUI. Re-read per call - a category approved while the server is running
@@ -153,10 +159,10 @@ server.registerTool(
   {
     title: "Download an email's attachments",
     description:
-      "Fetch every attachment of one email from the server and save it to ./Attachments - " +
-      "relative to the directory this MCP server was started in (the mox checkout, or " +
-      "~/Documents/mox for an installed mox), NOT the project you happen to be chatting about. " +
-      "A single file lands in Attachments/; several go into a subfolder named after the subject. " +
+      "Fetch every attachment of one email from the server and save it to an Attachments/ folder " +
+      "next to the mox database (the mox checkout, or ~/Documents/mox for an installed mox), NOT " +
+      "the directory this server was started in and NOT the project you happen to be chatting " +
+      "about. A single file lands in Attachments/; several go into a subfolder named after the subject. " +
       "Reports what it saved, or \"no attachments\" if the message carries none.",
     inputSchema: { id: z.number().int() },
   },
