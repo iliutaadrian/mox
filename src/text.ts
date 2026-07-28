@@ -1,6 +1,6 @@
 // Width-safe text helpers. Widths are measured with string-width (the same
-// library Ink uses to lay out), so a fitted column can never disagree with the
-// renderer and wrap.
+// library OpenTUI lays out with), so a fitted column can never disagree with
+// the renderer and wrap.
 //
 // Optional-emoji symbols (Emoji=Yes, Emoji_Presentation=No — e.g. "✍" in real
 // eMAG subjects) render 1 or 2 cells depending on the terminal. Forcing

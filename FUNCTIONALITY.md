@@ -1,35 +1,38 @@
 # mox — Implemented Functionality
 
-TUI email client. Bun + TypeScript + Ink/React. Pulls IMAP mail into a local SQLite corpus; browse, search, categorize, read. All logic in-process (no separate backend binary). ~1780 LOC across 10 files in `ink/src/`.
+TUI email client. Bun + TypeScript + OpenTUI/Solid. Pulls IMAP mail into a local SQLite corpus; browse, search, categorize, read. All logic in-process (no separate backend binary). Sources in `src/`.
 
 ## Architecture
 
 ```
-IMAP (imapflow) ──► SQLite (bun:sqlite) ──► Ink/React TUI
+IMAP (imapflow) ──► SQLite (bun:sqlite) ──► OpenTUI/Solid TUI
    mail.ts            db.ts                    app.tsx
    engine.ts          config.ts                index.tsx (entry)
-   backend.ts         text.ts / mouse.ts       mcp.ts (Claude tools)
+   backend.ts         text.ts / paths.ts       mcp.ts (Claude tools)
 ```
 
 - **Category lives ONLY in SQLite** — never written back to the mail server. Server is read-only except one op (`\Seen` flag).
-- **Two entry points:** `bun src/index.tsx` (TUI + flags), `bun src/mcp.ts` (MCP server, also `mox mcp`).
-- **DB path:** `mox.db` at repo root (WAL mode). Config: `config.yaml`.
+- **Two entry points:** `bun src/index.tsx` (TUI + flags, and `mox mcp`), `bun src/mcp.ts` (MCP server directly, dev only).
+- **Paths** (config, `mox.db` in WAL mode, `backup/`, `Attachments/`) are resolved in `paths.ts`: repo root when running from source, `~/Documents/mox` when installed. README owns the user-facing details.
 
 ## Files
 
-| File         | LOC | Role                                                                                        |
-| ------------ | --- | ------------------------------------------------------------------------------------------- |
-| `index.tsx`  | 50  | Entry. Resolves config + db, snapshots the store, dispatches the flags (`--version`, `--help`, `upgrade`, `--reclassify`, `--stats`, `--prefill`) and `mox mcp`, else renders the TUI. |
-| `app.tsx`    | 614 | The whole TUI: sidebar, list, reading pane, keybindings, mouse, pickers, search input.      |
-| `db.ts`      | 324 | SQLite store. Schema, migrations, search query builder, all reads/writes.                   |
-| `mail.ts`    | 306 | IMAP layer. Connection pool, UID-incremental sync, folder detection, BODYSTRUCTURE attachment metadata, attachment fetch. |
-| `config.ts`  | 128 | `config.yaml` parsing, sender-rule matching, rule persistence.                              |
-| `backend.ts` | 102 | Action layer the TUI calls (sync/mark/move/rule).                                           |
-| `text.ts`    | 88  | Width-safe text fitting (string-width), emoji presentation normalization.                   |
-| `mouse.ts`   | 59  | SGR mouse tracking (wheel + click), parsed off stdin.                                       |
-| `engine.ts`  | 58  | Fetch orchestration + deterministic rule-filing.                                            |
-| `backup.ts`  | 120 | Scheduled `VACUUM INTO` snapshots of the store into `backup/`, pruned to the newest N.       |
-| `mcp.ts`     | 199 | MCP server: search/read, triage, categorize, download attachments, draft replies.           |
+| File           | Role                                                                                        |
+| -------------- | ------------------------------------------------------------------------------------------- |
+| `index.tsx`    | Entry. Resolves config + db, snapshots the store, dispatches the flags (`--version`, `--help`, `upgrade`, `--reclassify`, `--stats`, `--prefill`) and `mox mcp`, else renders the TUI. |
+| `app.tsx`      | The whole TUI: sidebar, list, reading pane, keybindings, mouse, pickers, search input.      |
+| `db.ts`        | SQLite store. Schema, migrations, search query builder, all reads/writes.                   |
+| `mail.ts`      | IMAP layer. Connection pool, UID-incremental sync, folder detection, BODYSTRUCTURE attachment metadata, attachment fetch, draft append. |
+| `config.ts`    | `config.yaml` parsing, sender-rule matching, rule persistence.                              |
+| `backend.ts`   | Action layer the TUI and MCP server both call (sync/mark/move/rule/attachments).             |
+| `paths.ts`     | Single source of truth for config, db, backup and attachment locations.                      |
+| `engine.ts`    | Fetch orchestration + deterministic rule-filing.                                            |
+| `backup.ts`    | Scheduled `VACUUM INTO` snapshots of the store into `backup/`, pruned to the newest N.       |
+| `mcp.ts`       | MCP server: search/read, triage, categorize, download attachments, draft replies.           |
+| `compose.ts`   | Draft MIME builder (multipart/alternative); drafts are appended to IMAP Drafts, never sent.  |
+| `links.ts`     | Numbered-link extraction from lynx output (and bare URLs in plain text) for the link picker. |
+| `text.ts`      | Width-safe text fitting (string-width), emoji presentation normalization.                   |
+| `clipboard.ts` | System clipboard write via the first available platform tool (`pbcopy`/`wl-copy`/`xclip`/`xsel`). |
 
 ---
 
@@ -69,7 +72,7 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 - bare words → match subject OR sender OR body
 - SQL LIKE with `%_\` escaping. `/` opens search input; `esc` clears.
 
-### 5. TUI (Ink/React)
+### 5. TUI (OpenTUI/Solid)
 
 - **3-pane layout:** sidebar (All / Mailboxes / Manual / Other / Folders with live counts) · message list · reading pane.
 - **Message list:** per-row flags (select · done · unread) + a 📎 column marking messages that carry attachments (metadata from `BODYSTRUCTURE`, no downloads).
@@ -77,8 +80,8 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 - **Multi-select** (space) for bulk move/mark/rule.
 - **Windowed scrolling** in list, sidebar, and picker (handles long URL lists).
 - **Mouse:** wheel scroll, click-to-select, click-current-row-to-open, and drag-to-select text in the reader (releasing copies it).
-- **Width-safe rendering** (`text.ts`): measures with the same `string-width` Ink uses, forces emoji presentation (VS16) — prevents row-wrap corruption during rapid scroll.
-- **Anti-flicker:** synchronized-output (DEC 2026) frames + no key-move throttle.
+- **Width-safe rendering** (`text.ts`): measures with the same `string-width` OpenTUI lays out with, forces emoji presentation (VS16) — prevents row-wrap corruption during rapid scroll.
+- **Anti-flicker:** OpenTUI's native renderer owns the alt screen and synchronized output, and repaints only changed cells.
 
 ### 6. External viewers
 
@@ -131,13 +134,10 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 | Fast scan UI + search + categories        | ✅ built (rules + search + TUI)                                                                                  |
 | SQLite corpus for portability             | ✅ built (full body+html stored)                                                                                 |
 | **AI categorization**                     | ❌ stubbed only — `Suggested`/descriptions exist, no code calls a model                                          |
-| **AI reply drafting**                     | ❌ not started (SMTP in config but unused; `p` approve-suggestion referenced in config comment, not implemented) |
+| **AI reply drafting**                     | ⚠️ half — `create_draft` (MCP) builds the MIME and appends it to IMAP Drafts; nothing generates the text on its own |
 | **Learn from your templates**             | ❌ not started                                                                                                   |
 | Headless surface for Claude Code to drive | ✅ built — `mox mcp` exposes read, triage, categorize, attachments and draft replies                              |
 
 ## Known stale/rough spots
 
-- `app.tsx:1-4` header comment still describes the **old Go backend** ("shells out to the Go binary", "no AI classification") — inaccurate now.
-- Config comment mentions `p` to approve a `Suggested` category — **no `p` handler exists**.
-- `config.yaml` SMTP fields are placeholders (`you@yahoo.com`) — reply feature not built.
-- No tests anywhere.
+- `config.example.yaml` SMTP fields are placeholders and **unused** — mox appends drafts to IMAP Drafts and never sends.
