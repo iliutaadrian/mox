@@ -3,6 +3,13 @@
 # Only trusted when this file is present on the default branch (main). A copy on
 # a feature branch is ignored, so a PR cannot inject commands into the gate.
 
+# Required for the commands and agent keys below to be honored at all.
+allow_repo_commands: true
+
+# Pipeline agent. claude and codex are the only agents that neutralize this
+# repo's CLAUDE.md, so the gate refuses to launch any other one here.
+agent: claude
+
 commands:
   test: bun run check
   lint: bun run typecheck
