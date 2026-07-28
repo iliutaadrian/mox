@@ -10,7 +10,9 @@
 // Dev checkout:
 //   claude mcp add -s user mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
 // `-s user` registers it for every session; the default scope covers only the
-// current project. Config/db are located exactly like the TUI ($MOX_CONFIG /
+// current project. Bare `mox` must be on the PATH of whatever spawns MCP servers
+// (install.sh targets ~/.local/bin) — register the absolute binary path if it is
+// not. Config/db are located exactly like the TUI ($MOX_CONFIG /
 // repo ./config.yaml / ~/Documents/mox). See ./paths.ts.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -158,7 +160,7 @@ server.registerTool(
     title: "Download an email's attachments",
     description:
       "Fetch every attachment of one email from the server and save it to an Attachments/ folder " +
-      "next to the mox config (the mox checkout, or ~/Documents/mox for an installed mox), NOT " +
+      "next to the mox database (the mox checkout, or ~/Documents/mox for an installed mox), NOT " +
       "the directory this server was started in and NOT the project you happen to be chatting " +
       "about. A single file lands in Attachments/; several go into a subfolder named after the subject. " +
       "Reports what it saved, or \"no attachments\" if the message carries none.",

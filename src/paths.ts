@@ -4,6 +4,8 @@
 // Resolution order:
 //   config  →  $MOX_CONFIG  |  repo ./config.yaml (dev)  |  ~/Documents/mox/config.yaml (installed)
 //   db      →  $MOX_DB      |  repo ./mox.db when running from source (dev)  |  ~/Documents/mox/mox.db (installed)
+//   atts    →  Attachments/ next to the resolved db, so the store and the files it
+//              describes always share one folder
 //
 // The installed binary keeps everything — config, database, downloaded
 // attachments — in one visible folder: ~/Documents/mox. Running from source
@@ -32,4 +34,11 @@ export function resolveDbPath(cfgPath: string): string {
   if (cfgPath === repoConfig) return join(repoRoot, "mox.db");
   // Installed: always the shared data dir, regardless of config location.
   return join(DATA_DIR, "mox.db");
+}
+
+// Attachments follow the database, not the config: an installed build keeps the
+// store in DATA_DIR even when $MOX_CONFIG points elsewhere, and the downloaded
+// files belong in that same visible folder.
+export function resolveAttachmentsDir(cfgPath: string): string {
+  return join(dirname(resolveDbPath(cfgPath)), "Attachments");
 }

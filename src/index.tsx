@@ -261,28 +261,38 @@ if (args.includes("--prefill")) {
 // protocol stream. Nothing may write to stdout before the handoff, which is why
 // the renderer and the interface are imported inside that branch rather than at
 // the top of this file — on the MCP path no terminal code is ever loaded.
+// Snapshot the store before either interface starts writing to it (see
+// ./backup.ts). No-op unless one is due, and best-effort: a full disk or an
+// unwritable folder is reported and then ignored — it must never keep the client
+// from starting. Both entry points need it: `mox mcp` triages through the same
+// backend() as the TUI, and for a user who works mostly from Claude Code it is
+// the only process that ever touches the store. Warnings go to stderr, so the
+// MCP protocol stream on stdout stays clean.
+function startBackups(): void {
+  const backupCfg = loadConfig(cfgPath);
+  const first = maybeBackup(dbPath, backupCfg);
+  if (first.error) console.warn(`mox: backup skipped — ${first.error}`);
+
+  // A session can stay open for days, so re-check on a long interval too;
+  // maybeBackup returns immediately until the schedule comes due. unref so the
+  // timer never holds the process open on exit.
+  setInterval(() => maybeBackup(dbPath, backupCfg), 60 * 60 * 1000).unref();
+}
+
 if (args[0] === "mcp") {
   // Startup failures here reach a machine, not a terminal: Claude Code sees only
   // the exit code and stderr. Report one readable line and a non-zero exit
-  // instead of a stack trace through the minified bundle.
+  // instead of a stack trace through the minified bundle. loadConfig runs inside
+  // the same try, so a malformed config fails the same readable way.
   try {
+    startBackups();
     await import("./mcp.ts");
   } catch (e) {
     console.error(`mox mcp: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);
   }
 } else {
-  // Snapshot the store before opening the TUI (see ./backup.ts). No-op unless one
-  // is due, and best-effort: a full disk or an unwritable folder is reported here
-  // and then ignored — it must never keep the client from starting.
-  const backupCfg = loadConfig(cfgPath);
-  const firstBackup = maybeBackup(dbPath, backupCfg);
-  if (firstBackup.error) console.warn(`mox: backup skipped — ${firstBackup.error}`);
-
-  // A session can stay open for days, so re-check on a long interval too;
-  // maybeBackup returns immediately until the schedule comes due. unref so the
-  // timer never holds the process open on exit.
-  setInterval(() => maybeBackup(dbPath, backupCfg), 60 * 60 * 1000).unref();
+  startBackups();
 
   // Literal specifiers, so the bundler still follows both into the standalone build.
   const { render } = await import("@opentui/solid");

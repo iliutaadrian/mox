@@ -97,7 +97,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `g` still opens the goto picker (`gg` jumps to the top, `G` to the bottom).
 - Interactive refresh (`r`) now syncs **Sent** alongside INBOX, so replies sent
   from the provider's UI show up locally without a full `mox --prefill`.
-- `s` saves attachments into an `Attachments/` folder next to the config
+- `s` saves attachments into an `Attachments/` folder next to the database
   (`~/Documents/mox` when installed, the repo root in dev) instead of
   `~/Downloads`. The MCP `download_attachments` tool writes to the same folder,
   so a server Claude Code spawned inside some other project cannot drop mail
