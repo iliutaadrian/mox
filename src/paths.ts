@@ -1,5 +1,5 @@
 // Single source of truth for where config + the SQLite store live, shared by
-// the TUI (index.tsx), the headless CLI (cli.ts) and the MCP server (mcp.ts).
+// the TUI (index.tsx) and the MCP server (mcp.ts).
 //
 // Resolution order:
 //   config  →  $MOX_CONFIG  |  repo ./config.yaml (dev)  |  ~/Documents/mox/config.yaml (installed)

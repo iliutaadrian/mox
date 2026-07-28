@@ -187,28 +187,15 @@ mox --prefill                       # one-time seed: metadata for the WHOLE inbo
 mox --reclassify                    # re-file the whole inbox against the current
                                     #   config rules (manual moves kept), then exit
 mox --stats                         # print a snapshot of downloaded/offline mail
-bun src/cli.ts sync                 # fetch ALL folders + rule-file, then exit
-bun src/cli.ts attach <id> [name]   # download an attachment on demand
-bun src/cli.ts draft --reply-to <id> --body-file letter.txt
-                                    # compose a draft into the account's IMAP
-                                    #   Drafts folder (reply or standalone)
 ```
+
+Everything above runs on the installed binary. There is no separate CLI to keep in sync: the TUI covers day-to-day work, and anything scripted goes through the MCP tools.
 
 ### Drafts (compose without sending)
 
-mox has **no SMTP on purpose**: `draft` composes a nicely formatted message (plain text + generated HTML, UTF-8 safe) and appends it to the account's **IMAP Drafts folder**. You review and hit Send from your provider's own UI (webmail / phone app), so nothing ever leaves the machine unseen.
+mox has **no SMTP on purpose**: the `create_draft` MCP tool composes a nicely formatted message (plain text + generated HTML, UTF-8 safe) and appends it to the account's **IMAP Drafts folder**. You review and hit Send from your provider's own UI (webmail / phone app), so nothing ever leaves the machine unseen.
 
-```bash
-# reply to a stored message — account, To and "Re: …" subject are derived,
-# In-Reply-To/References thread it under the original
-bun src/cli.ts draft --reply-to 31606 --body-file letter.txt
-
-# standalone
-bun src/cli.ts draft --account Personal --to who@example.com \
-  --subject "Hello" --body "First paragraph.
-
-Second paragraph."
-```
+Ask Claude to reply to a message and it reaches for that tool. A reply derives the account, the To address and the `Re: …` subject from the original, and threads it with In-Reply-To/References. A standalone draft needs an account, a recipient and a subject.
 
 A normal launch only pulls the most recent `fetch_limit` messages with full content. `mox --prefill` additionally sweeps **envelope-only metadata** over every older INBOX message (so the whole inbox is searchable offline; bodies fetch on demand when opened), and caches full bodies for the `offline_categories`.
 
@@ -231,10 +218,11 @@ curl -fsSL https://raw.githubusercontent.com/iliutaadrian/mox/main/install.sh | 
 mox ships an MCP server so Claude Code can read *and triage* your mail as first-class tools. Register it once:
 
 ```bash
-claude mcp add mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
+claude mcp add -s user mox -- mox mcp          # installed binary
+claude mcp add -s user mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts   # from source
 ```
 
-It reads the same config and database as the TUI.
+`-s user` registers the server for every session; the default scope covers only the current project. It reads the same config and database as the TUI, so a `space`-marked row in the interface and an id handed to a tool mean the same message.
 
 | Tool | What it does |
 | --- | --- |
@@ -274,8 +262,7 @@ IMAP ──▶ local SQLite (body + html + local category/done columns)
 | `src/backend.ts` | in-process actions (sync/mark/move/archive/trash + inverses, draft) |
 | `src/compose.ts` | draft MIME builder (plain + HTML multipart, RFC 2047 headers) |
 | `src/app.tsx` | OpenTUI/Solid interface |
-| `src/cli.ts` | headless entry (`sync`, `attach`, `draft`) |
-| `src/mcp.ts` | MCP server for Claude (queries + `create_draft`) |
+| `src/mcp.ts` | MCP server for Claude (read + triage + `create_draft`), also reachable as `mox mcp` |
 
 Built with [OpenTUI](https://github.com/anomalyco/opentui) + [Solid](https://www.solidjs.com) on [Bun](https://bun.sh).
 

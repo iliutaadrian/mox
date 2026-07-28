@@ -39,6 +39,7 @@ usage:
   mox upgrade            download + install the latest release in place
   mox --version, -v      print the version and exit
   mox --help, -h         print this help and exit
+  mox mcp                serve MCP on stdio (for Claude Code), then exit on EOF
 
 config + database live in ~/Documents/mox (override with $MOX_CONFIG / $MOX_DB).`);
   process.exit(0);
@@ -71,7 +72,7 @@ if (args[0] === "upgrade") {
 process.on("uncaughtException", () => {});
 process.on("unhandledRejection", () => {});
 
-// Locate config + db (shared with cli.ts / mcp.ts). Installed builds keep both
+// Locate config + db (shared with mcp.ts). Installed builds keep both
 // in ~/Documents/mox; running from source uses the repo root. See ./paths.ts.
 const cfgPath = resolveCfgPath();
 const dbPath = resolveDbPath(cfgPath);
@@ -240,16 +241,28 @@ if (args.includes("--prefill")) {
   process.exit(failed.length ? 1 : 0);
 }
 
-// Snapshot the store before opening the TUI (see ./backup.ts). No-op unless one
-// is due, and best-effort: a full disk or an unwritable folder is reported here
-// and then ignored — it must never keep the client from starting.
-const backupCfg = loadConfig(cfgPath);
-const firstBackup = maybeBackup(dbPath, backupCfg);
-if (firstBackup.error) console.warn(`mox: backup skipped — ${firstBackup.error}`);
+// `mox mcp`: serve the MCP tools over stdio. mcp.ts is its own entry file, so a
+// dev checkout can run it straight with Bun — but an installed binary has no
+// source tree to point Claude Code at, so route it here as well. The import
+// specifier is a literal, so the bundler follows it into the standalone build.
+//
+// mcp.ts stays alive on its stdin listener, which is why the TUI startup sits in
+// the else branch: falling through would paint the interface over a live
+// protocol stream. Nothing may write to stdout before the handoff.
+if (args[0] === "mcp") {
+  await import("./mcp.ts");
+} else {
+  // Snapshot the store before opening the TUI (see ./backup.ts). No-op unless one
+  // is due, and best-effort: a full disk or an unwritable folder is reported here
+  // and then ignored — it must never keep the client from starting.
+  const backupCfg = loadConfig(cfgPath);
+  const firstBackup = maybeBackup(dbPath, backupCfg);
+  if (firstBackup.error) console.warn(`mox: backup skipped — ${firstBackup.error}`);
 
-// A session can stay open for days, so re-check on a long interval too;
-// maybeBackup returns immediately until the schedule comes due. unref so the
-// timer never holds the process open on exit.
-setInterval(() => maybeBackup(dbPath, backupCfg), 60 * 60 * 1000).unref();
+  // A session can stay open for days, so re-check on a long interval too;
+  // maybeBackup returns immediately until the schedule comes due. unref so the
+  // timer never holds the process open on exit.
+  setInterval(() => maybeBackup(dbPath, backupCfg), 60 * 60 * 1000).unref();
 
-await render(() => <App dbPath={dbPath} cfgPath={cfgPath} />, { exitOnCtrlC: true });
+  await render(() => <App dbPath={dbPath} cfgPath={cfgPath} />, { exitOnCtrlC: true });
+}

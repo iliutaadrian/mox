@@ -5,10 +5,13 @@
 // account's IMAP Drafts folder - mox never sends; drafts are reviewed and sent
 // from the provider's own UI.
 //
-// Register with Claude Code (once):
-//   claude mcp add mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
-// or add to a project .mcp.json. Config/db are located exactly like the TUI
-// ($MOX_CONFIG / repo ./config.yaml / ~/Documents/mox). See ./paths.ts.
+// Register with Claude Code (once). Installed binary:
+//   claude mcp add -s user mox -- mox mcp
+// Dev checkout:
+//   claude mcp add -s user mox -- bun /ABSOLUTE/PATH/mox/src/mcp.ts
+// `-s user` registers it for every session; the default scope covers only the
+// current project. Config/db are located exactly like the TUI ($MOX_CONFIG /
+// repo ./config.yaml / ~/Documents/mox). See ./paths.ts.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -17,6 +20,7 @@ import { Store } from "./db.ts";
 import { loadConfig } from "./config.ts";
 import { backend } from "./backend.ts";
 import { resolveCfgPath, resolveDbPath } from "./paths.ts";
+import pkg from "../package.json";
 
 const cfgPath = resolveCfgPath();
 const dbPath = resolveDbPath(cfgPath);
@@ -24,7 +28,7 @@ const store = new Store(dbPath);
 const cfg = loadConfig(cfgPath);
 const actions = backend(store, cfg);
 
-const server = new McpServer({ name: "mox", version: "1.0.0" });
+const server = new McpServer({ name: "mox", version: pkg.version });
 
 // Categories the user actually curates: config.yaml plus the ones approved in
 // the TUI. Re-read per call - a category approved while the server is running

@@ -8,11 +8,11 @@ TUI email client. Bun + TypeScript + Ink/React. Pulls IMAP mail into a local SQL
 IMAP (imapflow) ──► SQLite (bun:sqlite) ──► Ink/React TUI
    mail.ts            db.ts                    app.tsx
    engine.ts          config.ts                index.tsx (entry)
-   backend.ts         text.ts / mouse.ts       cli.ts (headless)
+   backend.ts         text.ts / mouse.ts       mcp.ts (Claude tools)
 ```
 
 - **Category lives ONLY in SQLite** — never written back to the mail server. Server is read-only except one op (`\Seen` flag).
-- **Two entry points:** `bun ink/src/index.tsx` (TUI), `bun ink/src/cli.ts <cmd>` (headless/scriptable).
+- **Two entry points:** `bun src/index.tsx` (TUI + flags), `bun src/mcp.ts` (MCP server, also `mox mcp`).
 - **DB path:** `mox.db` at repo root (WAL mode). Config: `config.yaml`.
 
 ## Files
@@ -29,7 +29,7 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► Ink/React TUI
 | `mouse.ts`   | 59  | SGR mouse tracking (wheel + click), parsed off stdin.                                       |
 | `engine.ts`  | 58  | Fetch orchestration + deterministic rule-filing.                                            |
 | `backup.ts`  | 120 | Scheduled `VACUUM INTO` snapshots of the store into `backup/`, pruned to the newest N.       |
-| `cli.ts`     | 50  | Headless commands (`sync`, `attach`).                                                       |
+| `mcp.ts`     | 380 | MCP server: search/read, triage, categorize, download attachments, draft replies.           |
 
 ---
 
@@ -90,10 +90,12 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 
 - **`M`/`U`** — mark read/unread: writes `\Seen` to the server (grouped by account+folder), mirrors locally. **Only server-mutating op.**
 
-### 8. Headless CLI (`cli.ts`)
+### 8. Headless surface (`mcp.ts`, `index.tsx` flags)
 
-- `sync` — full fetch across all folders + rule-file new mail. For large backfills without blocking the UI.
-- `attach <id> [name]` — re-fetch + download an attachment to cwd.
+- `mox mcp` — MCP server on stdio: `get_inbox`, `search_emails`, `get_email`, `triage_emails`, `set_category`, `create_draft`, `download_attachments`.
+- `mox --prefill` — whole-inbox metadata sweep + full bodies for the offline categories. The heavy seed.
+- `mox --reclassify` / `mox --stats` — re-file against current rules, or print a store snapshot. No network for either.
+- There is no separate CLI entry point. `r` in the TUI covers routine syncing (INBOX + Sent).
 
 ---
 
@@ -131,7 +133,7 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 | **AI categorization**                     | ❌ stubbed only — `Suggested`/descriptions exist, no code calls a model                                          |
 | **AI reply drafting**                     | ❌ not started (SMTP in config but unused; `p` approve-suggestion referenced in config comment, not implemented) |
 | **Learn from your templates**             | ❌ not started                                                                                                   |
-| Headless surface for Claude Code to drive | ⚠️ partial — `cli.ts` has sync/attach only; no `classify`/`draft`/`export` commands                              |
+| Headless surface for Claude Code to drive | ✅ built — `mox mcp` exposes read, triage, categorize, attachments and draft replies                              |
 
 ## Known stale/rough spots
 

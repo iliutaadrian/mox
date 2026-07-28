@@ -7,13 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- Draft composing without SMTP: `cli.ts draft` and the MCP `create_draft` tool
-  build a nicely formatted message (plain text + generated HTML, UTF-8-safe
-  headers/body) and append it to the account's IMAP Drafts folder with `\Draft`.
-  Either a threaded reply to a stored message (`--reply-to <id>` derives the
-  account, To and `Re:` subject, and sets In-Reply-To/References) or standalone
-  (`--account/--to/--subject`). mox never sends — drafts are reviewed and sent
-  from the provider's own UI.
+- Draft composing without SMTP: the MCP `create_draft` tool builds a nicely
+  formatted message (plain text + generated HTML, UTF-8-safe headers/body) and
+  appends it to the account's IMAP Drafts folder with `\Draft`. Either a threaded
+  reply to a stored message (`reply_to` derives the account, To and `Re:`
+  subject, and sets In-Reply-To/References) or standalone (`account`/`to`/
+  `subject`). mox never sends — drafts are reviewed and sent from the provider's
+  own UI.
+- `mox mcp` runs the MCP server straight from the installed binary, so
+  registering it needs no source checkout and no Bun:
+  `claude mcp add -s user mox -- mox mcp`.
+- The reading pane header shows the message `Id:` — the same id the MCP tools
+  take, so a message on screen can be handed straight to Claude.
 - `Store.full()` now exposes the message's `message_id` (used for reply threading).
 
 ### Added (copy mode)
@@ -74,6 +79,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Removed
 - MCP `list_emails` and `email_stats` tools; `search_emails` covers both
   (`in:` and category filters) and the surface stays smaller.
+- The headless CLI entry point (`src/cli.ts`) and its `sync` / `offline` /
+  `attach` / `draft` commands. It only ever ran from a source checkout, and
+  everything it did is reachable from the two surfaces that ship: the TUI (`r`
+  refreshes INBOX + Sent, `s` saves attachments, `mox --prefill` seeds the whole
+  inbox) and the MCP tools (triage, categories, attachments, drafts). One fewer
+  entry point, one fewer argument parser, no duplicate IMAP paths.
+- `fetchAttachment()` in `mail.ts` — the single-named-attachment fetch had no
+  callers left once `attach` went; `fetchAllAttachments()` covers every case.
 
 ### Changed
 - Keybindings: **trash moved from `d` to `t`** and **restore from `u` to `z`**,
@@ -81,7 +94,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reader also gained `g`/`G` to jump to the start/end of an email. In the list
   `g` still opens the goto picker (`gg` jumps to the top, `G` to the bottom).
 - Interactive refresh (`r`) now syncs **Sent** alongside INBOX, so replies sent
-  from the provider's UI show up locally without a full `cli sync`.
+  from the provider's UI show up locally without a full `mox --prefill`.
 - `s` saves attachments to `./Attachments` (under the directory mox was
   launched from) instead of `~/Downloads`.
 
