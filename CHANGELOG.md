@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-28
+
 ### Added
 - Draft composing without SMTP: the MCP `create_draft` tool builds a nicely
   formatted message (plain text + generated HTML, UTF-8-safe headers/body) and
@@ -173,7 +175,8 @@ First public release.
 - Prebuilt macOS binary (Apple Silicon) and a `curl | bash` installer;
   single-folder data directory at `~/Documents/mox`.
 
-[Unreleased]: https://github.com/iliutaadrian/mox/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/iliutaadrian/mox/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/iliutaadrian/mox/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/iliutaadrian/mox/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/iliutaadrian/mox/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/iliutaadrian/mox/compare/v1.0.0...v1.1.0
