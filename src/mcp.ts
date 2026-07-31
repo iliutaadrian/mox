@@ -183,9 +183,11 @@ server.registerTool(
       "Omit reply_to for a standalone new email, which needs account, to and subject. mox never " +
       "sends: the draft is appended to the account's IMAP Drafts folder (plain + HTML) and the " +
       "user reviews and sends it from their own mail app. body is plain text; blank lines " +
-      "separate paragraphs. attachments takes PATHS to files already on disk (absolute, or ~/…) - " +
-      "mox reads the bytes itself, so never paste file contents or base64 into this call. A path " +
-      "that cannot be read fails the whole draft rather than sending mail without its file.",
+      "separate paragraphs. attachments takes PATHS to files already on disk - mox reads the bytes " +
+      "itself, so never paste file contents or base64 into this call. Each path must be absolute " +
+      "or start with ~/; a relative path is refused, because it would resolve against whatever " +
+      "directory this server was started in and not the project you are chatting about. A path " +
+      "that cannot be read fails the whole draft rather than appending mail without its file.",
     inputSchema: {
       body: z.string(),
       reply_to: z.number().int().optional(),

@@ -140,8 +140,9 @@ describe("backend().moveBySender", () => {
 });
 
 // End-to-end over stdio: the real server process, pointed at a fixture mailbox
-// so it can never reach the installed one. Read-only calls only - the write
-// tools would need a live IMAP server.
+// so it can never reach the installed one. Read-only calls, plus write calls that
+// must be rejected before they reach IMAP - anything that would really append
+// needs a live server.
 describe("the server over stdio", () => {
   let fx: ReturnType<typeof makeFixture>;
   let client: Client;
@@ -191,6 +192,20 @@ describe("the server over stdio", () => {
     expect(prop!.type).toBe("array");
     expect(prop!.items?.type).toBe("string");
     expect(tool.inputSchema.required ?? []).not.toContain("attachments");
+  });
+
+  // The server's working directory is wherever Claude Code spawned it, which the
+  // caller cannot see. A relative path there would attach the wrong file, or the
+  // right file from the wrong project, so it is refused outright.
+  test("create_draft refuses a relative attachment path", async () => {
+    const res = await client.callTool({
+      name: "create_draft",
+      arguments: { account: "Test", to: "a@b.com", subject: "Invoice", body: "See attached.", attachments: ["invoice.pdf"] },
+    });
+    expect(res.isError).toBe(true);
+    const text = (res.content as { text: string }[])[0]!.text;
+    expect(text).toContain("invoice.pdf");
+    expect(text).toContain("absolute");
   });
 
   test("create_draft reports a path it cannot read instead of writing a draft", async () => {
@@ -250,6 +265,17 @@ describe("`mox mcp` through the binary entry point", () => {
   test("serves a read call over the routed server", async () => {
     const res = await client.callTool({ name: "get_inbox", arguments: { limit: 3 } });
     expect(JSON.parse((res.content as { text: string }[])[0]!.text).length).toBe(3);
+  });
+
+  // The entry point the user installs is the only place worth proving the
+  // attachments contract: a schema that exists in src/mcp.ts but never reaches
+  // the routed server is a tool Claude cannot call.
+  test("the routed create_draft advertises attachments as file paths", async () => {
+    const tool = (await client.listTools()).tools.find((t) => t.name === "create_draft")!;
+    const prop = (tool.inputSchema.properties as Record<string, { type?: string; items?: { type?: string } }>).attachments;
+    expect(prop?.type).toBe("array");
+    expect(prop?.items?.type).toBe("string");
+    expect(tool.description).toContain("PATHS");
   });
 });
 

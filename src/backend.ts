@@ -2,7 +2,7 @@
 // {ok, out} for the status line. Writes to the server happen only in mark().
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
 import { type Account, type Config } from "./config.ts";
@@ -19,7 +19,7 @@ export type DraftParams = {
   account?: string; // standalone: which account to draft from (default: first)
   to?: string; // standalone: required; reply: overrides the original sender
   subject?: string; // standalone: required; reply: overrides "Re: <original>"
-  attachments?: string[]; // paths on disk — read here, never passed in as base64
+  attachments?: string[]; // absolute paths on disk, read here, never base64 from the caller
 };
 
 // Enough to make the common attachments open with the right app; anything else
@@ -44,11 +44,16 @@ const MIME_BY_EXT: Record<string, string> = {
   ics: "text/calendar",
 };
 
-// Paths → bytes, before anything touches the network: an unreadable path must
+// Paths to bytes, before anything touches the network: an unreadable path must
 // fail the whole draft rather than silently append a mail missing its PDF.
+// Only an absolute path, or one under the home directory, is accepted. The MCP
+// server's working directory is wherever the caller started it, so a relative
+// path resolves somewhere neither the model nor the user can see.
 function readAttachments(paths: string[]): DraftAttachment[] {
   return paths.map((p) => {
-    const path = p.startsWith("~") ? join(homedir(), p.slice(1)) : resolve(p);
+    const home = p === "~" || p.startsWith("~/");
+    if (!home && !isAbsolute(p)) throw new Error(`attachment path must be absolute or start with ~/: ${p}`);
+    const path = home ? join(homedir(), p.slice(1)) : p;
     let bytes: Buffer;
     try {
       bytes = readFileSync(path);
