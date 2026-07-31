@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- File attachments on drafts: the MCP `create_draft` tool takes an `attachments`
+  list of paths, reads the bytes off disk itself, and wraps the message in a
+  multipart/mixed envelope with one part per file. The caller passes paths, never
+  file contents, so a 44 KB PDF costs a few tokens instead of tens of thousands.
+  A path must be absolute or start with `~/`. A path mox cannot read fails the
+  whole draft, so no mail is ever appended without its file.
+
 ## [1.4.0] - 2026-07-28
 
 ### Added
