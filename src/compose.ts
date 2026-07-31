@@ -4,12 +4,21 @@
 // Output is multipart/alternative: the plain text as written, plus an HTML
 // part generated from it so paragraphs survive every composer.
 
+// A file to hang off the draft. The caller reads the bytes (mox takes paths, not
+// base64 in tool args — see backend.draft) so this layer stays pure.
+export type DraftAttachment = {
+  filename: string;
+  contentType: string;
+  bytes: Buffer;
+};
+
 export type DraftInput = {
   from: string; // bare address; the provider fills the display name on send
   to: string;
   subject: string;
   text: string; // plain text; blank lines separate paragraphs
   inReplyTo?: string; // original Message-ID, with <> — makes the draft a reply
+  attachments?: DraftAttachment[]; // present ⇒ multipart/mixed wraps the body
 };
 
 // RFC 2047 encoded-word for header values with non-ASCII (e.g. diacritics in a
@@ -40,10 +49,43 @@ export function htmlFromText(text: string): string {
 
 // Base64 body encoding sidesteps every 8-bit/line-length pitfall (Yahoo mangled
 // raw 8bit UTF-8 drafts in testing). 76-char lines per RFC 2045.
-const b64lines = (s: string) => Buffer.from(s, "utf-8").toString("base64").replace(/(.{76})/g, "$1\r\n");
+const wrap76 = (b64: string) => b64.replace(/(.{76})/g, "$1\r\n");
+const b64lines = (s: string) => wrap76(Buffer.from(s, "utf-8").toString("base64"));
+
+const newBoundary = () => `----=_mox_${Math.random().toString(36).slice(2)}`;
+
+// The message body proper: the text as written plus an HTML rendering of it.
+function alternativePart(text: string): string[] {
+  const boundary = newBoundary();
+  return [
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    ``,
+    `--${boundary}`,
+    `Content-Type: text/plain; charset=UTF-8`,
+    `Content-Transfer-Encoding: base64`,
+    ``,
+    b64lines(text.replace(/\r\n/g, "\n")),
+    `--${boundary}`,
+    `Content-Type: text/html; charset=UTF-8`,
+    `Content-Transfer-Encoding: base64`,
+    ``,
+    b64lines(htmlFromText(text)),
+    `--${boundary}--`,
+  ];
+}
+
+function attachmentPart(a: DraftAttachment): string[] {
+  const name = encodeHeaderValue(a.filename);
+  return [
+    `Content-Type: ${a.contentType}; name="${name}"`,
+    `Content-Transfer-Encoding: base64`,
+    `Content-Disposition: attachment; filename="${name}"`,
+    ``,
+    wrap76(a.bytes.toString("base64")),
+  ];
+}
 
 export function buildDraftMime(d: DraftInput): string {
-  const boundary = `----=_mox_${Math.random().toString(36).slice(2)}`;
   const headers = [
     `From: ${d.from}`,
     `To: ${d.to}`,
@@ -51,22 +93,22 @@ export function buildDraftMime(d: DraftInput): string {
     ...(d.inReplyTo ? [`In-Reply-To: ${d.inReplyTo}`, `References: ${d.inReplyTo}`] : []),
     `Date: ${new Date().toUTCString().replace("GMT", "+0000")}`,
     `MIME-Version: 1.0`,
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ];
+  const body = alternativePart(d.text);
+  const files = d.attachments ?? [];
+  if (!files.length) return [...headers, ...body, ``].join("\r\n");
+
+  // Attachments ⇒ multipart/mixed envelope holding the alternative body first,
+  // then one part per file (the order every mail client renders as expected).
+  const mixed = newBoundary();
   return [
     ...headers,
+    `Content-Type: multipart/mixed; boundary="${mixed}"`,
     ``,
-    `--${boundary}`,
-    `Content-Type: text/plain; charset=UTF-8`,
-    `Content-Transfer-Encoding: base64`,
-    ``,
-    b64lines(d.text.replace(/\r\n/g, "\n")),
-    `--${boundary}`,
-    `Content-Type: text/html; charset=UTF-8`,
-    `Content-Transfer-Encoding: base64`,
-    ``,
-    b64lines(htmlFromText(d.text)),
-    `--${boundary}--`,
+    `--${mixed}`,
+    ...body,
+    ...files.flatMap((a) => [`--${mixed}`, ...attachmentPart(a)]),
+    `--${mixed}--`,
     ``,
   ].join("\r\n");
 }

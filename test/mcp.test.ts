@@ -182,6 +182,26 @@ describe("the server over stdio", () => {
     expect(rows.map((r: { date: number }) => r.date)).toEqual([...rows.map((r: { date: number }) => r.date)].sort((a, b) => b - a));
   });
 
+  // A PDF must reach a draft without the caller pasting 59 KB of base64 into the
+  // tool call, so the wire contract takes paths on disk.
+  test("create_draft takes attachments as an array of file paths", async () => {
+    const tool = (await client.listTools()).tools.find((t) => t.name === "create_draft")!;
+    const prop = (tool.inputSchema.properties as Record<string, { type?: string; items?: { type?: string } }>).attachments;
+    expect(prop).toBeDefined();
+    expect(prop!.type).toBe("array");
+    expect(prop!.items?.type).toBe("string");
+    expect(tool.inputSchema.required ?? []).not.toContain("attachments");
+  });
+
+  test("create_draft reports a path it cannot read instead of writing a draft", async () => {
+    const res = await client.callTool({
+      name: "create_draft",
+      arguments: { account: "Test", to: "a@b.com", subject: "Invoice", body: "See attached.", attachments: ["/nope/missing.pdf"] },
+    });
+    expect(res.isError).toBe(true);
+    expect((res.content as { text: string }[])[0]!.text).toContain("/nope/missing.pdf");
+  });
+
   test("set_category refuses a category the user never configured", async () => {
     const res = await client.callTool({ name: "set_category", arguments: { category: "Invented", from: "sender@example.com" } });
     expect(res.isError).toBe(true);

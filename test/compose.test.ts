@@ -55,6 +55,31 @@ describe("buildDraftMime", () => {
   });
 });
 
+describe("buildDraftMime with attachments", () => {
+  const pdf = { filename: "invoice.pdf", contentType: "application/pdf", bytes: Buffer.from("%PDF-1.4\nhello") };
+
+  test("wraps the alternative body in a multipart/mixed envelope", () => {
+    const mime = buildDraftMime({ ...base, attachments: [pdf] });
+    const outer = /Content-Type: multipart\/mixed; boundary="([^"]+)"/.exec(mime)![1]!;
+    const inner = /Content-Type: multipart\/alternative; boundary="([^"]+)"/.exec(mime)![1]!;
+    expect(outer).not.toBe(inner);
+    expect(mime).toContain(`--${outer}--`);
+    expect(mime).toContain(`--${inner}--`);
+    // the alternative part opens inside the mixed envelope, not before it
+    expect(mime.indexOf(`--${outer}`)).toBeLessThan(mime.indexOf("multipart/alternative"));
+  });
+
+  test("the file is a base64 attachment part that round-trips byte for byte", () => {
+    // Every byte value, so a charset slip or a stray CR corrupts the result.
+    const bytes = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+    const mime = buildDraftMime({ ...base, attachments: [{ ...pdf, bytes }] });
+    expect(mime).toContain('Content-Type: application/pdf; name="invoice.pdf"');
+    expect(mime).toContain('Content-Disposition: attachment; filename="invoice.pdf"');
+    const chunk = mime.split('Content-Disposition: attachment; filename="invoice.pdf"\r\n\r\n')[1]!.split(/\r\n--/)[0]!;
+    expect(Buffer.from(chunk.replace(/\s/g, ""), "base64").equals(bytes)).toBe(true);
+  });
+});
+
 describe("encodeHeaderValue", () => {
   test("passes ASCII through untouched", () => {
     expect(encodeHeaderValue("Simple subject")).toBe("Simple subject");

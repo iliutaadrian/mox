@@ -1,15 +1,15 @@
 // Actions the TUI triggers, run IN-PROCESS (no subprocess). Each returns
 // {ok, out} for the status line. Writes to the server happen only in mark().
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
 import { type Account, type Config } from "./config.ts";
 import { refresh } from "./engine.ts";
 import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders, fetchBody, fetchAllAttachments, appendDraft } from "./mail.ts";
 import { resolveAttachmentsDir, resolveCfgPath } from "./paths.ts";
-import { buildDraftMime, replySubject } from "./compose.ts";
+import { buildDraftMime, replySubject, type DraftAttachment } from "./compose.ts";
 
 export type Result = { ok: boolean; out: string };
 
@@ -19,7 +19,47 @@ export type DraftParams = {
   account?: string; // standalone: which account to draft from (default: first)
   to?: string; // standalone: required; reply: overrides the original sender
   subject?: string; // standalone: required; reply: overrides "Re: <original>"
+  attachments?: string[]; // paths on disk — read here, never passed in as base64
 };
+
+// Enough to make the common attachments open with the right app; anything else
+// travels as a generic binary, which every mail client still saves correctly.
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  txt: "text/plain",
+  csv: "text/csv",
+  md: "text/markdown",
+  json: "application/json",
+  zip: "application/zip",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ics: "text/calendar",
+};
+
+// Paths → bytes, before anything touches the network: an unreadable path must
+// fail the whole draft rather than silently append a mail missing its PDF.
+function readAttachments(paths: string[]): DraftAttachment[] {
+  return paths.map((p) => {
+    const path = p.startsWith("~") ? join(homedir(), p.slice(1)) : resolve(p);
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(path);
+    } catch {
+      throw new Error(`cannot read attachment ${p}`);
+    }
+    const filename = basename(path);
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+    return { filename, contentType: MIME_BY_EXT[ext] ?? "application/octet-stream", bytes };
+  });
+}
 
 function accByName(cfg: Config): Map<string, Account> {
   return new Map(cfg.accounts.map((a) => [a.name, a]));
@@ -264,6 +304,7 @@ export function backend(store: Store, cfg: Config) {
     async draft(p: DraftParams): Promise<Result> {
       try {
         if (!p.body?.trim()) return { ok: false, out: "draft body is empty" };
+        const files = p.attachments?.length ? readAttachments(p.attachments) : [];
         const accs = accByName(cfg);
         let acc: Account | undefined;
         let to = p.to ?? "";
@@ -283,9 +324,10 @@ export function backend(store: Store, cfg: Config) {
           if (!to) return { ok: false, out: "standalone draft needs a to address" };
           if (!subject) return { ok: false, out: "standalone draft needs a subject" };
         }
-        const mime = buildDraftMime({ from: acc.imapUser, to, subject, text: p.body, inReplyTo });
+        const mime = buildDraftMime({ from: acc.imapUser, to, subject, text: p.body, inReplyTo, attachments: files });
         const { folder } = await appendDraft(acc, mime);
-        return { ok: true, out: `draft "${subject}" saved to ${acc.name}/${folder} — send it from your mail app` };
+        const withFiles = files.length ? ` with ${files.map((f) => f.filename).join(", ")}` : "";
+        return { ok: true, out: `draft "${subject}"${withFiles} saved to ${acc.name}/${folder} — send it from your mail app` };
       } catch (e) {
         return { ok: false, out: String(e) };
       }

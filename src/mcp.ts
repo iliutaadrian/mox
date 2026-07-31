@@ -183,17 +183,20 @@ server.registerTool(
       "Omit reply_to for a standalone new email, which needs account, to and subject. mox never " +
       "sends: the draft is appended to the account's IMAP Drafts folder (plain + HTML) and the " +
       "user reviews and sends it from their own mail app. body is plain text; blank lines " +
-      "separate paragraphs.",
+      "separate paragraphs. attachments takes PATHS to files already on disk (absolute, or ~/…) - " +
+      "mox reads the bytes itself, so never paste file contents or base64 into this call. A path " +
+      "that cannot be read fails the whole draft rather than sending mail without its file.",
     inputSchema: {
       body: z.string(),
       reply_to: z.number().int().optional(),
       account: z.string().optional(),
       to: z.string().optional(),
       subject: z.string().optional(),
+      attachments: z.array(z.string()).optional(),
     },
   },
-  async ({ body, reply_to, account, to, subject }) => {
-    const res = await actions.draft({ body, replyTo: reply_to, account, to, subject });
+  async ({ body, reply_to, account, to, subject, attachments }) => {
+    const res = await actions.draft({ body, replyTo: reply_to, account, to, subject, attachments });
     return { content: [{ type: "text", text: res.out }], isError: !res.ok };
   },
 );
