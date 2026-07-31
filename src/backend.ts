@@ -49,12 +49,21 @@ const MIME_BY_EXT: Record<string, string> = {
 // files is deliberately narrow: user documents under the home directory, plus
 // the temp directory for files a tool just generated. Dotfiles are out - that is
 // where the private material lives (~/.ssh, ~/.aws, ~/.config).
-const attachmentRoots = () => [homedir(), tmpdir()].map((r) => realpathSync(r));
+// Both spellings of each root count: os.tmpdir() hands out /var/folders/... on
+// macOS while its real path is /private/var/folders/..., so a lexical check
+// against the resolved form alone would refuse every file a tool just wrote to
+// the temp directory.
+const attachmentRoots = () => {
+  const roots = [homedir(), tmpdir()];
+  return [...new Set([...roots, ...roots.map((r) => realpathSync(r))])];
+};
 
 // Big files would be held three times over (bytes, base64, the whole MIME
 // string) in a long-lived server process, and the provider rejects the APPEND
-// anyway - so refuse up front with a size the caller can act on.
+// anyway - so refuse up front with a size the caller can act on. The total
+// matters as much as any single file: the MIME string is built from the sum.
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_ATTACHMENTS_TOTAL_BYTES = 25 * 1024 * 1024;
 
 function checkUnderRoot(path: string, shown: string): void {
   const roots = attachmentRoots();
@@ -70,6 +79,7 @@ function checkUnderRoot(path: string, shown: string): void {
 // server's working directory is wherever the caller started it, so a relative
 // path resolves somewhere neither the model nor the user can see.
 function readAttachments(paths: string[]): DraftAttachment[] {
+  let total = 0;
   return paths.map((p) => {
     const home = p === "~" || p.startsWith("~/");
     if (!home && !isAbsolute(p)) throw new Error(`attachment path must be absolute or start with ~/: ${p}`);
@@ -90,6 +100,9 @@ function readAttachments(paths: string[]): DraftAttachment[] {
     checkUnderRoot(real, p);
     if (size > MAX_ATTACHMENT_BYTES)
       throw new Error(`attachment ${p} is ${Math.round(size / 1024 / 1024)} MB, over the ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB limit`);
+    total += size;
+    if (total > MAX_ATTACHMENTS_TOTAL_BYTES)
+      throw new Error(`attachments total ${Math.round(total / 1024 / 1024)} MB, over the ${MAX_ATTACHMENTS_TOTAL_BYTES / 1024 / 1024} MB limit for one draft`);
     let bytes: Buffer;
     try {
       bytes = readFileSync(real);

@@ -3,7 +3,7 @@
 // underneath (Store + backend actions) are tested directly, and the server
 // itself only through a spawned stdio smoke test.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -218,6 +218,41 @@ describe("the server over stdio", () => {
     });
     expect(res.isError).toBe(true);
     expect((res.content as { text: string }[])[0]!.text).toContain("hidden path");
+  });
+
+  // os.tmpdir() and its real path differ on macOS (/var/folders/... against
+  // /private/var/folders/...), so a file a tool just generated there must still
+  // pass the root check the docs promise it passes.
+  test("create_draft accepts a file in the temp directory", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "mox-att-")), "report.pdf");
+    writeFileSync(path, "pdf bytes");
+    const res = await client.callTool({
+      name: "create_draft",
+      arguments: { account: "Test", to: "a@b.com", subject: "Invoice", body: "See attached.", attachments: [path] },
+    });
+    const text = (res.content as { text: string }[])[0]!.text;
+    expect(text).not.toContain("must be under");
+    expect(text).not.toContain("cannot read attachment");
+    rmSync(path, { force: true });
+  });
+
+  // Per-file limits alone let many files add up to a MIME string big enough to
+  // take the long-lived server down, so the total is refused up front too.
+  test("create_draft refuses attachments that together exceed the total limit", async () => {
+    const attDir = mkdtempSync(join(tmpdir(), "mox-att-"));
+    const paths = ["a.bin", "b.bin"].map((n) => {
+      const p = join(attDir, n);
+      writeFileSync(p, "");
+      truncateSync(p, 15 * 1024 * 1024);
+      return p;
+    });
+    const res = await client.callTool({
+      name: "create_draft",
+      arguments: { account: "Test", to: "a@b.com", subject: "Big", body: "See attached.", attachments: paths },
+    });
+    expect(res.isError).toBe(true);
+    expect((res.content as { text: string }[])[0]!.text).toContain("attachments total");
+    rmSync(attDir, { recursive: true, force: true });
   });
 
   test("create_draft reports a path it cannot read instead of writing a draft", async () => {

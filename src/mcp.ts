@@ -189,7 +189,7 @@ server.registerTool(
       "directory this server was started in and not the project you are chatting about. A path " +
       "that cannot be read fails the whole draft rather than appending mail without its file. Only " +
       "files under the home or temp directory can be attached, and never a hidden dotfile path such " +
-      "as ~/.ssh or ~/.aws; each file is capped at 20 MB.",
+      "as ~/.ssh or ~/.aws; each file is capped at 20 MB and one draft at 25 MB of attachments.",
     inputSchema: {
       body: z.string(),
       reply_to: z.number().int().optional(),

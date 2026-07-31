@@ -14,7 +14,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A path must be absolute or start with `~/`, must resolve under the home or temp
   directory, and must not be a hidden dotfile path (`~/.ssh`, `~/.aws`) — the
   bytes end up in the mail provider's mailbox, and the model choosing the path
-  reads untrusted mail. Each file is capped at 20 MB. A path mox cannot read
+  reads untrusted mail. Each file is capped at 20 MB, and one draft at 25 MB of
+  attachments in total. A path mox cannot read
   fails the whole draft, so no mail is ever appended without its file.
 
 ## [1.4.0] - 2026-07-28
