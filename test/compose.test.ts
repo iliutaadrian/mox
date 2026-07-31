@@ -78,6 +78,35 @@ describe("buildDraftMime with attachments", () => {
     const chunk = mime.split('Content-Disposition: attachment; filename="invoice.pdf"\r\n\r\n')[1]!.split(/\r\n--/)[0]!;
     expect(Buffer.from(chunk.replace(/\s/g, ""), "base64").equals(bytes)).toBe(true);
   });
+
+  test("every file gets its own part inside the one envelope", () => {
+    const mime = buildDraftMime({
+      ...base,
+      attachments: [pdf, { ...pdf, filename: "photo.png", contentType: "image/png" }],
+    });
+    const mixed = /Content-Type: multipart\/mixed; boundary="([^"]+)"/.exec(mime)![1]!;
+    // 3 opening delimiters (body + 2 files) and 1 closing one.
+    expect(mime.split(`--${mixed}\r\n`).length - 1).toBe(3);
+    expect(mime.split(`--${mixed}--`).length - 1).toBe(1);
+    expect(mime).toContain('filename="invoice.pdf"');
+    expect(mime).toContain('filename="photo.png"');
+  });
+
+  // A filename comes off the user's disk, so it can hold a quote or a newline.
+  // Unescaped, it breaks the header or injects one.
+  test("a filename with a quote or a newline cannot break out of the header", () => {
+    const mime = buildDraftMime({ ...base, attachments: [{ ...pdf, filename: 'we"ird\r\nBcc: x@y.com.pdf' }] });
+    const lines = mime.split("\r\n");
+    expect(lines.some((l) => l.startsWith("Bcc:"))).toBe(false);
+    const line = lines.find((l) => l.startsWith("Content-Disposition:"))!;
+    expect(line).toBe('Content-Disposition: attachment; filename="we\\"ird Bcc: x@y.com.pdf"');
+  });
+
+  test("a non-ASCII filename uses RFC 2231, not an encoded word", () => {
+    const mime = buildDraftMime({ ...base, attachments: [{ ...pdf, filename: "factură.pdf" }] });
+    expect(mime).not.toContain("=?UTF-8?B?");
+    expect(mime).toContain("filename*=UTF-8''factur%C4%83.pdf");
+  });
 });
 
 describe("encodeHeaderValue", () => {

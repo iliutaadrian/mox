@@ -1,11 +1,12 @@
 // Draft MIME builder. mox never sends mail (no SMTP) — drafts are composed
 // here and appended to the account's IMAP Drafts folder (mail.appendDraft),
 // then reviewed and sent from the provider's own UI (webmail / phone app).
-// Output is multipart/alternative: the plain text as written, plus an HTML
-// part generated from it so paragraphs survive every composer.
+// The body is multipart/alternative: the plain text as written, plus an HTML
+// part generated from it so paragraphs survive every composer. With attachments,
+// a multipart/mixed envelope wraps that body and holds one part per file.
 
 // A file to hang off the draft. The caller reads the bytes (mox takes paths, not
-// base64 in tool args — see backend.draft) so this layer stays pure.
+// base64 in tool args - see backend.draft) so this layer stays pure.
 export type DraftAttachment = {
   filename: string;
   contentType: string;
@@ -18,7 +19,7 @@ export type DraftInput = {
   subject: string;
   text: string; // plain text; blank lines separate paragraphs
   inReplyTo?: string; // original Message-ID, with <> — makes the draft a reply
-  attachments?: DraftAttachment[]; // present ⇒ multipart/mixed wraps the body
+  attachments?: DraftAttachment[]; // if present, multipart/mixed wraps the body
 };
 
 // RFC 2047 encoded-word for header values with non-ASCII (e.g. diacritics in a
@@ -74,12 +75,35 @@ function alternativePart(text: string): string[] {
   ];
 }
 
+// Percent-encoding for an RFC 2231 parameter value. Only attribute characters
+// pass through; everything else, including the quote and the apostrophe that
+// delimits the charset, becomes a hex escape.
+const rfc2231 = (s: string) =>
+  [...Buffer.from(s, "utf-8")]
+    .map((b) => {
+      const c = String.fromCharCode(b);
+      return /[A-Za-z0-9!#$&+.^_`|~-]/.test(c) ? c : `%${b.toString(16).toUpperCase().padStart(2, "0")}`;
+    })
+    .join("");
+
+// A filename arrives from the user's disk, so it can hold a quote or a line
+// break. A raw line break injects a header and a raw quote closes the parameter
+// early, so control characters collapse to a space and the rest is escaped. A
+// non-ASCII name cannot use an RFC 2047 encoded word - those are not legal in a
+// MIME parameter value, and strict clients save the literal "=?UTF-8?B?..."
+// text as the filename. RFC 2231 is the mechanism that works.
+function filenameParam(raw: string): string {
+  const name = raw.replace(/[\x00-\x1f]+/g, " ").trim();
+  if (/[^\x20-\x7e]/.test(name)) return `filename*=UTF-8''${rfc2231(name)}`;
+  return `filename="${name.replace(/([\\"])/g, "\\$1")}"`;
+}
+
 function attachmentPart(a: DraftAttachment): string[] {
-  const name = encodeHeaderValue(a.filename);
+  const param = filenameParam(a.filename);
   return [
-    `Content-Type: ${a.contentType}; name="${name}"`,
+    `Content-Type: ${a.contentType}; ${param.replace(/^filename/, "name")}`,
     `Content-Transfer-Encoding: base64`,
-    `Content-Disposition: attachment; filename="${name}"`,
+    `Content-Disposition: attachment; ${param}`,
     ``,
     wrap76(a.bytes.toString("base64")),
   ];
@@ -98,7 +122,7 @@ export function buildDraftMime(d: DraftInput): string {
   const files = d.attachments ?? [];
   if (!files.length) return [...headers, ...body, ``].join("\r\n");
 
-  // Attachments ⇒ multipart/mixed envelope holding the alternative body first,
+  // Attachments need a multipart/mixed envelope, holding the alternative body first,
   // then one part per file (the order every mail client renders as expected).
   const mixed = newBoundary();
   return [
