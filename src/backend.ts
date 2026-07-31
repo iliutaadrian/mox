@@ -1,6 +1,6 @@
 // Actions the TUI triggers, run IN-PROCESS (no subprocess). Each returns
 // {ok, out} for the status line. Writes to the server happen only in mark().
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -309,17 +309,15 @@ export function backend(store: Store, cfg: Config) {
     // database — ~/Documents/mox for an installed mox, the repo root in dev (see
     // ./paths.ts). Not process.cwd(): `mox mcp` is spawned by Claude Code with the
     // cwd of whatever project the user is chatting in, and mail does not belong there.
-    // One file → straight into Attachments; multiple → a subfolder named after
-    // the email so they stay grouped. Name collisions get " (2)", " (3)" … suffixes.
+    // Every message — even a single attachment — gets its own subfolder, named
+    // after the message's IMAP uid (not the local db id). The uid is the stable
+    // identity: it's how a second call recognizes "already got this one" and
+    // skips IMAP entirely instead of re-fetching into a duplicate folder.
     async download(id: number): Promise<Result> {
       try {
         const row = store.byIds([id])[0];
-        const full = store.full(id);
         const acc = row && accByName(cfg).get(row.account);
         if (!row || !acc) return { ok: false, out: "message not found" };
-        const name = await folderName(new Map(), acc, row.mailbox);
-        const atts = await fetchAllAttachments(acc, name, row.uid);
-        if (atts.length === 0) return { ok: true, out: "no attachments" };
 
         const uniquePath = (base: string, fname: string) => {
           const safe = fname.replace(/[/\\]/g, "-");
@@ -334,28 +332,31 @@ export function backend(store: Store, cfg: Config) {
           return dest;
         };
 
+        const where = (dir: string) => {
+          // Absolute so the MCP caller knows exactly where the files went, but
+          // with $HOME collapsed to ~ so it still fits the TUI's one-line status.
+          const home = homedir();
+          return `${dir === home || dir.startsWith(home + "/") ? "~" + dir.slice(home.length) : dir}/`;
+        };
+
         const base = resolveAttachmentsDir(resolveCfgPath());
-        let outDir = base;
-        if (atts.length > 1) {
-          // Folder name from the subject (fallback sender), sanitized + trimmed.
-          const label = (full?.subject?.trim() || full?.from_name || row.account || "email")
-            .replace(/[/\\:*?"<>|]/g, "-")
-            .replace(/\s+/g, " ")
-            .slice(0, 80)
-            .trim();
-          outDir = uniquePath(base, label); // reuse collision logic for the dir too
-          mkdirSync(outDir, { recursive: true });
-        } else {
-          mkdirSync(base, { recursive: true });
+        mkdirSync(base, { recursive: true });
+
+        // Idempotency check happens before any IMAP call: a non-empty folder
+        // already named for this uid means the attachments are already on disk.
+        const outDir = join(base, String(row.uid));
+        if (existsSync(outDir) && readdirSync(outDir).length > 0) {
+          return { ok: true, out: `already downloaded to ${where(outDir)}` };
         }
 
+        const name = await folderName(new Map(), acc, row.mailbox);
+        const atts = await fetchAllAttachments(acc, name, row.uid);
+        if (atts.length === 0) return { ok: true, out: "no attachments" };
+
+        mkdirSync(outDir, { recursive: true });
+
         for (const a of atts) writeFileSync(uniquePath(outDir, a.filename), a.data);
-        // Absolute so the MCP caller knows exactly where the files went, but with
-        // $HOME collapsed to ~ so it still fits the TUI's one-line status area.
-        const dir = atts.length > 1 ? outDir : base;
-        const home = homedir();
-        const where = `${dir === home || dir.startsWith(home + "/") ? "~" + dir.slice(home.length) : dir}/`;
-        return { ok: true, out: `downloaded ${atts.length} attachment${atts.length > 1 ? "s" : ""} to ${where}` };
+        return { ok: true, out: `downloaded ${atts.length} attachment${atts.length > 1 ? "s" : ""} to ${where(outDir)}` };
       } catch (e) {
         return { ok: false, out: String(e) };
       }
