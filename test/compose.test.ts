@@ -49,6 +49,20 @@ describe("buildDraftMime", () => {
     expect(mime).not.toContain("References");
   });
 
+  // On a reply, To and In-Reply-To come from the incoming message, i.e. from the
+  // sender, so a line break in either would add a header to the appended draft.
+  test("a line break in an address or a message id cannot inject a header", () => {
+    const mime = buildDraftMime({
+      ...base,
+      to: "them@example.com\r\nBcc: leak@evil.com",
+      inReplyTo: "<orig@server>\r\nBcc: leak@evil.com",
+    });
+    const lines = mime.split("\r\n");
+    expect(lines.some((l) => l.startsWith("Bcc:"))).toBe(false);
+    expect(mime).toContain("To: them@example.com Bcc: leak@evil.com");
+    expect(mime).toContain("In-Reply-To: <orig@server> Bcc: leak@evil.com");
+  });
+
   test("base64 lines stay within the 76-char limit", () => {
     const mime = buildDraftMime({ ...base, text: "x".repeat(5000) });
     for (const line of mime.split("\r\n")) expect(line.length).toBeLessThanOrEqual(76);

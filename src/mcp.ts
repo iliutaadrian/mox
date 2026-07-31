@@ -187,7 +187,9 @@ server.registerTool(
       "itself, so never paste file contents or base64 into this call. Each path must be absolute " +
       "or start with ~/; a relative path is refused, because it would resolve against whatever " +
       "directory this server was started in and not the project you are chatting about. A path " +
-      "that cannot be read fails the whole draft rather than appending mail without its file.",
+      "that cannot be read fails the whole draft rather than appending mail without its file. Only " +
+      "files under the home or temp directory can be attached, and never a hidden dotfile path such " +
+      "as ~/.ssh or ~/.aws; each file is capped at 20 MB.",
     inputSchema: {
       body: z.string(),
       reply_to: z.number().int().optional(),

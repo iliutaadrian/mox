@@ -1,8 +1,8 @@
 // Actions the TUI triggers, run IN-PROCESS (no subprocess). Each returns
 // {ok, out} for the status line. Writes to the server happen only in mark().
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, isAbsolute, join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
 
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
 import { type Account, type Config } from "./config.ts";
@@ -44,6 +44,26 @@ const MIME_BY_EXT: Record<string, string> = {
   ics: "text/calendar",
 };
 
+// A draft's bytes leave the machine (they land in the provider's mailbox), and
+// the model that picks the paths reads untrusted mail, so the set of readable
+// files is deliberately narrow: user documents under the home directory, plus
+// the temp directory for files a tool just generated. Dotfiles are out - that is
+// where the private material lives (~/.ssh, ~/.aws, ~/.config).
+const attachmentRoots = () => [homedir(), tmpdir()].map((r) => realpathSync(r));
+
+// Big files would be held three times over (bytes, base64, the whole MIME
+// string) in a long-lived server process, and the provider rejects the APPEND
+// anyway - so refuse up front with a size the caller can act on.
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+function checkUnderRoot(path: string, shown: string): void {
+  const roots = attachmentRoots();
+  const root = roots.find((r) => path === r || path.startsWith(r + sep));
+  if (!root) throw new Error(`attachment must be under ${roots.join(" or ")}: ${shown}`);
+  const rest = path.slice(root.length).split(sep);
+  if (rest.some((seg) => seg.startsWith("."))) throw new Error(`refusing a hidden path, private files live in dotfiles: ${shown}`);
+}
+
 // Paths to bytes, before anything touches the network: an unreadable path must
 // fail the whole draft rather than silently append a mail missing its PDF.
 // Only an absolute path, or one under the home directory, is accepted. The MCP
@@ -53,10 +73,26 @@ function readAttachments(paths: string[]): DraftAttachment[] {
   return paths.map((p) => {
     const home = p === "~" || p.startsWith("~/");
     if (!home && !isAbsolute(p)) throw new Error(`attachment path must be absolute or start with ~/: ${p}`);
-    const path = home ? join(homedir(), p.slice(1)) : p;
+    const path = resolve(home ? join(homedir(), p.slice(1)) : p);
+    // The lexical path first, so a policy violation reports itself even when the
+    // file is missing; then the real path, so a symlink cannot step outside.
+    checkUnderRoot(path, p);
+    let real: string;
+    let size: number;
+    try {
+      real = realpathSync(path);
+      const st = statSync(real);
+      if (!st.isFile()) throw new Error("not a file");
+      size = st.size;
+    } catch {
+      throw new Error(`cannot read attachment ${p}`);
+    }
+    checkUnderRoot(real, p);
+    if (size > MAX_ATTACHMENT_BYTES)
+      throw new Error(`attachment ${p} is ${Math.round(size / 1024 / 1024)} MB, over the ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB limit`);
     let bytes: Buffer;
     try {
-      bytes = readFileSync(path);
+      bytes = readFileSync(real);
     } catch {
       throw new Error(`cannot read attachment ${p}`);
     }

@@ -35,6 +35,12 @@ export function encodeHeaderValue(s: string): string {
   return words.join(" ");
 }
 
+// On the reply path From/To/In-Reply-To come from a stored incoming message, so
+// a value can carry a line break and inject a header (`a@b.com\r\nBcc: x@y.com`).
+// Every header value in the builder goes through here; folding is not needed
+// because these values are single addresses or message ids.
+const headerValue = (s: string) => s.replace(/[\r\n\t]+/g, " ").trim();
+
 const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 // Plain text → simple HTML: blank lines split paragraphs, single newlines
@@ -111,10 +117,12 @@ function attachmentPart(a: DraftAttachment): string[] {
 
 export function buildDraftMime(d: DraftInput): string {
   const headers = [
-    `From: ${d.from}`,
-    `To: ${d.to}`,
-    `Subject: ${encodeHeaderValue(d.subject)}`,
-    ...(d.inReplyTo ? [`In-Reply-To: ${d.inReplyTo}`, `References: ${d.inReplyTo}`] : []),
+    `From: ${headerValue(d.from)}`,
+    `To: ${headerValue(d.to)}`,
+    `Subject: ${encodeHeaderValue(headerValue(d.subject))}`,
+    ...(d.inReplyTo
+      ? [`In-Reply-To: ${headerValue(d.inReplyTo)}`, `References: ${headerValue(d.inReplyTo)}`]
+      : []),
     `Date: ${new Date().toUTCString().replace("GMT", "+0000")}`,
     `MIME-Version: 1.0`,
   ];

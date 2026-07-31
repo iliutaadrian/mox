@@ -96,7 +96,7 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 ### 8. Headless surface (`mcp.ts`, `index.tsx` flags)
 
 - `mox mcp` — MCP server on stdio: `get_inbox`, `search_emails`, `get_email`, `triage_emails`, `set_category`, `create_draft`, `download_attachments`.
-  - `create_draft` also takes `attachments`, a list of absolute (or `~/`) paths. `backend.readAttachments` reads the bytes and guesses the content type from the extension, before any IMAP call; `compose.buildDraftMime` then wraps the multipart/alternative body in a multipart/mixed envelope, one part per file.
+  - `create_draft` also takes `attachments`, a list of absolute (or `~/`) paths. `backend.readAttachments` reads the bytes and guesses the content type from the extension, before any IMAP call — a path must resolve (symlinks included) under the home or temp directory, must not contain a hidden dotfile segment, and must be at most 20 MB; `compose.buildDraftMime` then wraps the multipart/alternative body in a multipart/mixed envelope, one part per file.
 - `mox --prefill` — whole-inbox metadata sweep + full bodies for the offline categories. The heavy seed.
 - `mox --reclassify` / `mox --stats` — re-file against current rules, or print a store snapshot. No network for either.
 - There is no separate CLI entry point. `r` in the TUI covers routine syncing (INBOX + Sent).
