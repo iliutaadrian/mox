@@ -3,7 +3,7 @@
 // underneath (Store + backend actions) are tested directly, and the server
 // itself only through a spawned stdio smoke test.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -140,8 +140,9 @@ describe("backend().moveBySender", () => {
 });
 
 // End-to-end over stdio: the real server process, pointed at a fixture mailbox
-// so it can never reach the installed one. Read-only calls only - the write
-// tools would need a live IMAP server.
+// so it can never reach the installed one. Read-only calls, plus write calls that
+// must be rejected before they reach IMAP - anything that would really append
+// needs a live server.
 describe("the server over stdio", () => {
   let fx: ReturnType<typeof makeFixture>;
   let client: Client;
@@ -180,6 +181,87 @@ describe("the server over stdio", () => {
     const rows = JSON.parse((res.content as { text: string }[])[0]!.text);
     expect(rows.length).toBe(5);
     expect(rows.map((r: { date: number }) => r.date)).toEqual([...rows.map((r: { date: number }) => r.date)].sort((a, b) => b - a));
+  });
+
+  // A PDF must reach a draft without the caller pasting 59 KB of base64 into the
+  // tool call, so the wire contract takes paths on disk.
+  test("create_draft takes attachments as an array of file paths", async () => {
+    const tool = (await client.listTools()).tools.find((t) => t.name === "create_draft")!;
+    const prop = (tool.inputSchema.properties as Record<string, { type?: string; items?: { type?: string } }>).attachments;
+    expect(prop).toBeDefined();
+    expect(prop!.type).toBe("array");
+    expect(prop!.items?.type).toBe("string");
+    expect(tool.inputSchema.required ?? []).not.toContain("attachments");
+  });
+
+  // The server's working directory is wherever Claude Code spawned it, which the
+  // caller cannot see. A relative path there would attach the wrong file, or the
+  // right file from the wrong project, so it is refused outright.
+  test("create_draft refuses a relative attachment path", async () => {
+    const res = await client.callTool({
+      name: "create_draft",
+      arguments: { account: "Test", to: "a@b.com", subject: "Invoice", body: "See attached.", attachments: ["invoice.pdf"] },
+    });
+    expect(res.isError).toBe(true);
+    const text = (res.content as { text: string }[])[0]!.text;
+    expect(text).toContain("invoice.pdf");
+    expect(text).toContain("absolute");
+  });
+
+  // The bytes end up in the provider's mailbox, and the model choosing the path
+  // reads untrusted mail, so private dotfiles are refused even though they sit
+  // under the home directory and are perfectly readable.
+  test("create_draft refuses a dotfile path", async () => {
+    const res = await client.callTool({
+      name: "create_draft",
+      arguments: { account: "Test", to: "a@b.com", subject: "Keys", body: "See attached.", attachments: ["~/.ssh/id_rsa"] },
+    });
+    expect(res.isError).toBe(true);
+    expect((res.content as { text: string }[])[0]!.text).toContain("hidden path");
+  });
+
+  // os.tmpdir() and its real path differ on macOS (/var/folders/... against
+  // /private/var/folders/...), so a file a tool just generated there must still
+  // pass the root check the docs promise it passes.
+  test("create_draft accepts a file in the temp directory", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "mox-att-")), "report.pdf");
+    writeFileSync(path, "pdf bytes");
+    const res = await client.callTool({
+      name: "create_draft",
+      arguments: { account: "Test", to: "a@b.com", subject: "Invoice", body: "See attached.", attachments: [path] },
+    });
+    const text = (res.content as { text: string }[])[0]!.text;
+    expect(text).not.toContain("must be under");
+    expect(text).not.toContain("cannot read attachment");
+    rmSync(path, { force: true });
+  });
+
+  // Per-file limits alone let many files add up to a MIME string big enough to
+  // take the long-lived server down, so the total is refused up front too.
+  test("create_draft refuses attachments that together exceed the total limit", async () => {
+    const attDir = mkdtempSync(join(tmpdir(), "mox-att-"));
+    const paths = ["a.bin", "b.bin"].map((n) => {
+      const p = join(attDir, n);
+      writeFileSync(p, "");
+      truncateSync(p, 15 * 1024 * 1024);
+      return p;
+    });
+    const res = await client.callTool({
+      name: "create_draft",
+      arguments: { account: "Test", to: "a@b.com", subject: "Big", body: "See attached.", attachments: paths },
+    });
+    expect(res.isError).toBe(true);
+    expect((res.content as { text: string }[])[0]!.text).toContain("attachments total");
+    rmSync(attDir, { recursive: true, force: true });
+  });
+
+  test("create_draft reports a path it cannot read instead of writing a draft", async () => {
+    const res = await client.callTool({
+      name: "create_draft",
+      arguments: { account: "Test", to: "a@b.com", subject: "Invoice", body: "See attached.", attachments: ["/nope/missing.pdf"] },
+    });
+    expect(res.isError).toBe(true);
+    expect((res.content as { text: string }[])[0]!.text).toContain("/nope/missing.pdf");
   });
 
   test("set_category refuses a category the user never configured", async () => {
@@ -230,6 +312,17 @@ describe("`mox mcp` through the binary entry point", () => {
   test("serves a read call over the routed server", async () => {
     const res = await client.callTool({ name: "get_inbox", arguments: { limit: 3 } });
     expect(JSON.parse((res.content as { text: string }[])[0]!.text).length).toBe(3);
+  });
+
+  // The entry point the user installs is the only place worth proving the
+  // attachments contract: a schema that exists in src/mcp.ts but never reaches
+  // the routed server is a tool Claude cannot call.
+  test("the routed create_draft advertises attachments as file paths", async () => {
+    const tool = (await client.listTools()).tools.find((t) => t.name === "create_draft")!;
+    const prop = (tool.inputSchema.properties as Record<string, { type?: string; items?: { type?: string } }>).attachments;
+    expect(prop?.type).toBe("array");
+    expect(prop?.items?.type).toBe("string");
+    expect(tool.description).toContain("PATHS");
   });
 });
 

@@ -29,7 +29,7 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► OpenTUI/Solid TUI
 | `engine.ts`    | Fetch orchestration + deterministic rule-filing.                                            |
 | `backup.ts`    | Scheduled `VACUUM INTO` snapshots of the store into `backup/`, pruned to the newest N.       |
 | `mcp.ts`       | MCP server: search/read, triage, categorize, download attachments, draft replies.           |
-| `compose.ts`   | Draft MIME builder (multipart/alternative); drafts are appended to IMAP Drafts, never sent.  |
+| `compose.ts`   | Draft MIME builder (multipart/alternative, wrapped in multipart/mixed when there are attachments); drafts are appended to IMAP Drafts, never sent. |
 | `links.ts`     | Numbered-link extraction from lynx output (and bare URLs in plain text) for the link picker. |
 | `text.ts`      | Width-safe text fitting (string-width), emoji presentation normalization.                   |
 | `clipboard.ts` | System clipboard write via the first available platform tool (`pbcopy`/`wl-copy`/`xclip`/`xsel`). |
@@ -96,6 +96,7 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 ### 8. Headless surface (`mcp.ts`, `index.tsx` flags)
 
 - `mox mcp` — MCP server on stdio: `get_inbox`, `search_emails`, `get_email`, `triage_emails`, `set_category`, `create_draft`, `download_attachments`.
+  - `create_draft` also takes `attachments`, a list of absolute (or `~/`) paths. `backend.readAttachments` reads the bytes and guesses the content type from the extension, before any IMAP call — a path must resolve (symlinks included) under the home or temp directory, must not contain a hidden dotfile segment, and must be at most 20 MB, with the attachments of one draft capped at 25 MB in total; `compose.buildDraftMime` then wraps the multipart/alternative body in a multipart/mixed envelope, one part per file.
 - `mox --prefill` — whole-inbox metadata sweep + full bodies for the offline categories. The heavy seed.
 - `mox --reclassify` / `mox --stats` — re-file against current rules, or print a store snapshot. No network for either.
 - There is no separate CLI entry point. `r` in the TUI covers routine syncing (INBOX + Sent).
@@ -134,7 +135,7 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 | Fast scan UI + search + categories        | ✅ built (rules + search + TUI)                                                                                  |
 | SQLite corpus for portability             | ✅ built (full body+html stored)                                                                                 |
 | **AI categorization**                     | ❌ stubbed only — `Suggested`/descriptions exist, no code calls a model                                          |
-| **AI reply drafting**                     | ⚠️ half — `create_draft` (MCP) builds the MIME and appends it to IMAP Drafts; nothing generates the text on its own |
+| **AI reply drafting**                     | ⚠️ half - `create_draft` (MCP) builds the MIME (attachments included) and appends it to IMAP Drafts; nothing generates the text on its own |
 | **Learn from your templates**             | ❌ not started                                                                                                   |
 | Headless surface for Claude Code to drive | ✅ built — `mox mcp` exposes read, triage, categorize, attachments and draft replies                              |
 

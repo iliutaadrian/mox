@@ -1,15 +1,15 @@
 // Actions the TUI triggers, run IN-PROCESS (no subprocess). Each returns
 // {ok, out} for the status line. Writes to the server happen only in mark().
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
 
 import { Store, CLASS_INBOX, CLASS_TRASH, CLASS_ARCHIVE } from "./db.ts";
 import { type Account, type Config } from "./config.ts";
 import { refresh } from "./engine.ts";
 import { detectFolders, setSeen, trashMessages, untrashMessages, archiveMessages, unarchiveMessages, reconcileFolders, fetchBody, fetchAllAttachments, appendDraft } from "./mail.ts";
 import { resolveAttachmentsDir, resolveCfgPath } from "./paths.ts";
-import { buildDraftMime, replySubject } from "./compose.ts";
+import { buildDraftMime, replySubject, type DraftAttachment } from "./compose.ts";
 
 export type Result = { ok: boolean; out: string };
 
@@ -19,7 +19,102 @@ export type DraftParams = {
   account?: string; // standalone: which account to draft from (default: first)
   to?: string; // standalone: required; reply: overrides the original sender
   subject?: string; // standalone: required; reply: overrides "Re: <original>"
+  attachments?: string[]; // absolute paths on disk, read here, never base64 from the caller
 };
+
+// Enough to make the common attachments open with the right app; anything else
+// travels as a generic binary, which every mail client still saves correctly.
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  txt: "text/plain",
+  csv: "text/csv",
+  md: "text/markdown",
+  json: "application/json",
+  zip: "application/zip",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ics: "text/calendar",
+};
+
+// A draft's bytes leave the machine (they land in the provider's mailbox), and
+// the model that picks the paths reads untrusted mail, so the set of readable
+// files is deliberately narrow: user documents under the home directory, plus
+// the temp directory for files a tool just generated. Dotfiles are out - that is
+// where the private material lives (~/.ssh, ~/.aws, ~/.config).
+// Both spellings of each root count: os.tmpdir() hands out /var/folders/... on
+// macOS while its real path is /private/var/folders/..., so a lexical check
+// against the resolved form alone would refuse every file a tool just wrote to
+// the temp directory.
+const attachmentRoots = () => {
+  const roots = [homedir(), tmpdir()];
+  return [...new Set([...roots, ...roots.map((r) => realpathSync(r))])];
+};
+
+// Big files would be held three times over (bytes, base64, the whole MIME
+// string) in a long-lived server process, and the provider rejects the APPEND
+// anyway - so refuse up front with a size the caller can act on. The total
+// matters as much as any single file: the MIME string is built from the sum.
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_ATTACHMENTS_TOTAL_BYTES = 25 * 1024 * 1024;
+
+function checkUnderRoot(path: string, shown: string): void {
+  const roots = attachmentRoots();
+  const root = roots.find((r) => path === r || path.startsWith(r + sep));
+  if (!root) throw new Error(`attachment must be under ${roots.join(" or ")}: ${shown}`);
+  const rest = path.slice(root.length).split(sep);
+  if (rest.some((seg) => seg.startsWith("."))) throw new Error(`refusing a hidden path, private files live in dotfiles: ${shown}`);
+}
+
+// Paths to bytes, before anything touches the network: an unreadable path must
+// fail the whole draft rather than silently append a mail missing its PDF.
+// A path must be absolute or start with ~/: the MCP server's working directory
+// is wherever the caller started it, so a relative path resolves somewhere
+// neither the model nor the user can see. Where it may point, and how big it may
+// be, is the roots/limits policy above.
+function readAttachments(paths: string[]): DraftAttachment[] {
+  let total = 0;
+  return paths.map((p) => {
+    const home = p === "~" || p.startsWith("~/");
+    if (!home && !isAbsolute(p)) throw new Error(`attachment path must be absolute or start with ~/: ${p}`);
+    const path = resolve(home ? join(homedir(), p.slice(1)) : p);
+    // The lexical path first, so a policy violation reports itself even when the
+    // file is missing; then the real path, so a symlink cannot step outside.
+    checkUnderRoot(path, p);
+    let real: string;
+    let size: number;
+    try {
+      real = realpathSync(path);
+      const st = statSync(real);
+      if (!st.isFile()) throw new Error("not a file");
+      size = st.size;
+    } catch {
+      throw new Error(`cannot read attachment ${p}`);
+    }
+    checkUnderRoot(real, p);
+    if (size > MAX_ATTACHMENT_BYTES)
+      throw new Error(`attachment ${p} is ${Math.round(size / 1024 / 1024)} MB, over the ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB limit`);
+    total += size;
+    if (total > MAX_ATTACHMENTS_TOTAL_BYTES)
+      throw new Error(`attachments total ${Math.round(total / 1024 / 1024)} MB, over the ${MAX_ATTACHMENTS_TOTAL_BYTES / 1024 / 1024} MB limit for one draft`);
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(real);
+    } catch {
+      throw new Error(`cannot read attachment ${p}`);
+    }
+    const filename = basename(path);
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+    return { filename, contentType: MIME_BY_EXT[ext] ?? "application/octet-stream", bytes };
+  });
+}
 
 function accByName(cfg: Config): Map<string, Account> {
   return new Map(cfg.accounts.map((a) => [a.name, a]));
@@ -264,6 +359,7 @@ export function backend(store: Store, cfg: Config) {
     async draft(p: DraftParams): Promise<Result> {
       try {
         if (!p.body?.trim()) return { ok: false, out: "draft body is empty" };
+        const files = p.attachments?.length ? readAttachments(p.attachments) : [];
         const accs = accByName(cfg);
         let acc: Account | undefined;
         let to = p.to ?? "";
@@ -283,9 +379,10 @@ export function backend(store: Store, cfg: Config) {
           if (!to) return { ok: false, out: "standalone draft needs a to address" };
           if (!subject) return { ok: false, out: "standalone draft needs a subject" };
         }
-        const mime = buildDraftMime({ from: acc.imapUser, to, subject, text: p.body, inReplyTo });
+        const mime = buildDraftMime({ from: acc.imapUser, to, subject, text: p.body, inReplyTo, attachments: files });
         const { folder } = await appendDraft(acc, mime);
-        return { ok: true, out: `draft "${subject}" saved to ${acc.name}/${folder} — send it from your mail app` };
+        const withFiles = files.length ? ` with ${files.map((f) => f.filename).join(", ")}` : "";
+        return { ok: true, out: `draft "${subject}"${withFiles} saved to ${acc.name}/${folder} — send it from your mail app` };
       } catch (e) {
         return { ok: false, out: String(e) };
       }

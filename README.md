@@ -197,6 +197,8 @@ mox has **no SMTP on purpose**: the `create_draft` MCP tool composes a nicely fo
 
 Ask Claude to reply to a message and it reaches for that tool. A reply derives the account, the To address and the `Re: …` subject from the original, and threads it with In-Reply-To/References. A standalone draft needs an account, a recipient and a subject.
 
+A draft can carry files. Pass `attachments` a list of **paths** to files already on disk (absolute, or starting with `~/`) and mox reads the bytes itself. You never paste file contents into the conversation, so attaching a 44 KB PDF costs a few tokens instead of tens of thousands. A relative path is refused, because it would resolve against whatever directory Claude Code started the server in. The file must also resolve under your home or temp directory and must not sit on a hidden dotfile path (`~/.ssh`, `~/.aws`): a draft's bytes travel to your mail provider, and the paths are chosen by a model that reads untrusted mail. Each file is capped at 20 MB, and one draft at 25 MB of attachments in total. A path mox cannot read fails the whole draft, so a mail is never appended without its file.
+
 A normal launch only pulls the most recent `fetch_limit` messages with full content. `mox --prefill` additionally sweeps **envelope-only metadata** over every older INBOX message (so the whole inbox is searchable offline; bodies fetch on demand when opened), and caches full bodies for the `offline_categories`.
 
 Attachment presence is captured from IMAP **`BODYSTRUCTURE`** (no bytes downloaded) on every sync, so the list marks messages that carry files with a 📎. Files themselves are still fetched only on demand with `s`.
@@ -233,10 +235,10 @@ Bare `mox mcp` only works if `mox` is on the `PATH` of the process that spawns M
 | `get_email` | Full headers, body and HTML for one id. |
 | `triage_emails` | `done`/`undone`, `trash`/`untrash`, `archive`/`unarchive`, `read`/`unread` for one or many ids. |
 | `set_category` | Re-file mail by ids, or **everything from one sender** (`from: "contact@oxigentour.ro"`). |
-| `create_draft` | Compose a reply as a draft. This is the tool for "respond to this email". |
+| `create_draft` | Compose a reply as a draft. This is the tool for "respond to this email". `attachments` takes paths to files on disk. |
 | `download_attachments` | Fetch one email's files to `Attachments/` next to the database. |
 
-**What actually changes where:** `done` and `set_category` are **local only** - they never touch your mail server, which is why they are safe to hand to a model. `trash`, `archive` and `read`/`unread` are **real IMAP moves**, visible in every other client. `create_draft` only appends to your Drafts folder; mox never sends, so you always review and send yourself.
+**What actually changes where:** `done` and `set_category` are **local only** - they never touch your mail server, which is why they are safe to hand to a model. `trash`, `archive` and `read`/`unread` are **real IMAP moves**, visible in every other client. `create_draft` only appends to your Drafts folder; mox never sends, so you always review and send yourself. It **reads** any file you list in `attachments`, and nothing else on disk.
 
 `set_category` matches a sender as an exact address (not a domain), records the change as your own choice so a later `mox --reclassify` cannot undo it, and only accepts categories that exist in your config or approved list. `download_attachments` saves next to your database - `~/Documents/mox/Attachments` for an installed mox, the repo root in a dev checkout - never into the project you happen to be chatting about, whatever directory Claude Code spawned the server in.
 
@@ -262,7 +264,7 @@ IMAP ──▶ local SQLite (body + html + local category/done columns)
 | `src/mail.ts` | `imapflow` fetch + `mailparser`; pooled connections; server moves |
 | `src/engine.ts` | fetch → rule-file → persist |
 | `src/backend.ts` | in-process actions (sync/mark/move/archive/trash + inverses, draft) |
-| `src/compose.ts` | draft MIME builder (plain + HTML multipart, RFC 2047 headers) |
+| `src/compose.ts` | draft MIME builder (plain + HTML multipart, attachment parts, RFC 2047 headers / RFC 2231 filenames) |
 | `src/app.tsx` | OpenTUI/Solid interface |
 | `src/mcp.ts` | MCP server for Claude (read + triage + `create_draft`), also reachable as `mox mcp` |
 

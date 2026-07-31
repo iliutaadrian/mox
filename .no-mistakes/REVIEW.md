@@ -1,8 +1,8 @@
 # Review checklist for mox
 
 The gate reads this file from the branch under review, not from the default
-branch. The non-negotiable rules live in `.no-mistakes.yaml`, which is trusted
-from `main` only. This file adds detail; it cannot relax anything stated there.
+branch. `.no-mistakes.yaml` is trusted from `main` only and carries the gate's
+test and lint commands; the review rules themselves live here.
 
 ## Report nothing but defects
 
