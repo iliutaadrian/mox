@@ -75,9 +75,10 @@ function checkUnderRoot(path: string, shown: string): void {
 
 // Paths to bytes, before anything touches the network: an unreadable path must
 // fail the whole draft rather than silently append a mail missing its PDF.
-// Only an absolute path, or one under the home directory, is accepted. The MCP
-// server's working directory is wherever the caller started it, so a relative
-// path resolves somewhere neither the model nor the user can see.
+// A path must be absolute or start with ~/: the MCP server's working directory
+// is wherever the caller started it, so a relative path resolves somewhere
+// neither the model nor the user can see. Where it may point, and how big it may
+// be, is the roots/limits policy above.
 function readAttachments(paths: string[]): DraftAttachment[] {
   let total = 0;
   return paths.map((p) => {

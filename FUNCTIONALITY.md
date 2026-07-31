@@ -29,7 +29,7 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► OpenTUI/Solid TUI
 | `engine.ts`    | Fetch orchestration + deterministic rule-filing.                                            |
 | `backup.ts`    | Scheduled `VACUUM INTO` snapshots of the store into `backup/`, pruned to the newest N.       |
 | `mcp.ts`       | MCP server: search/read, triage, categorize, download attachments, draft replies.           |
-| `compose.ts`   | Draft MIME builder (multipart/alternative); drafts are appended to IMAP Drafts, never sent.  |
+| `compose.ts`   | Draft MIME builder (multipart/alternative, wrapped in multipart/mixed when there are attachments); drafts are appended to IMAP Drafts, never sent. |
 | `links.ts`     | Numbered-link extraction from lynx output (and bare URLs in plain text) for the link picker. |
 | `text.ts`      | Width-safe text fitting (string-width), emoji presentation normalization.                   |
 | `clipboard.ts` | System clipboard write via the first available platform tool (`pbcopy`/`wl-copy`/`xclip`/`xsel`). |

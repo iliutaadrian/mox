@@ -264,7 +264,7 @@ IMAP ──▶ local SQLite (body + html + local category/done columns)
 | `src/mail.ts` | `imapflow` fetch + `mailparser`; pooled connections; server moves |
 | `src/engine.ts` | fetch → rule-file → persist |
 | `src/backend.ts` | in-process actions (sync/mark/move/archive/trash + inverses, draft) |
-| `src/compose.ts` | draft MIME builder (plain + HTML multipart, RFC 2047 headers) |
+| `src/compose.ts` | draft MIME builder (plain + HTML multipart, attachment parts, RFC 2047 headers / RFC 2231 filenames) |
 | `src/app.tsx` | OpenTUI/Solid interface |
 | `src/mcp.ts` | MCP server for Claude (read + triage + `create_draft`), also reachable as `mox mcp` |
 
