@@ -2,6 +2,8 @@
 // block (domains / addresses / subject-or-sender words) files mail
 // deterministically; one without holds only manually-moved mail.
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import { parse } from "yaml";
 
 export type Account = {
@@ -32,6 +34,11 @@ export type Config = {
   backupEnabled: boolean; // write periodic snapshots of the db into ./backup next to it
   backupEveryHours: number; // minimum age of the newest backup before another is taken
   backupKeep: number; // how many backups to keep; older ones are pruned
+  backupDir: string; // where snapshots are written; "" = a backup/ folder next to the database
+  headless: boolean; // launch the sync daemon instead of the TUI (servers with no terminal)
+  headlessEverySeconds: number; // seconds between syncs in headless mode
+  refreshEverySeconds: number; // seconds between the TUI's background inbox syncs
+  dataDir: string; // where the database + Attachments/ live; "" = the built-in default
 };
 
 // A positive number from config, falling back to `def` for missing/garbage/<=0
@@ -39,6 +46,17 @@ export type Config = {
 function positive(v: unknown, def: number): number {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : def;
+}
+
+/** expandPath turns a user-written path into an absolute one: `~` is the home
+ * directory, and a relative path resolves against the process cwd. "" stays ""
+ * so callers can tell "not set" from "set to somewhere". */
+function expandPath(v: unknown): string {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (!s) return "";
+  const home = homedir();
+  const expanded = s === "~" ? home : s.startsWith("~/") ? join(home, s.slice(2)) : s;
+  return isAbsolute(expanded) ? expanded : resolve(expanded);
 }
 
 export function loadConfig(path: string): Config {
@@ -73,6 +91,11 @@ export function loadConfig(path: string): Config {
     backupEnabled: raw.backup_enabled !== false, // on unless explicitly disabled
     backupEveryHours: positive(raw.backup_every_hours, 12),
     backupKeep: Math.max(1, Math.floor(positive(raw.backup_keep, 2))),
+    backupDir: expandPath(raw.backup_dir),
+    headless: raw.headless === true, // off unless explicitly enabled
+    headlessEverySeconds: Math.floor(positive(raw.headless_every_seconds, 60)),
+    refreshEverySeconds: Math.floor(positive(raw.refresh_every_seconds, 10)),
+    dataDir: expandPath(raw.data_dir),
   };
 }
 

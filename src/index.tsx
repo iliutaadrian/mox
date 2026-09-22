@@ -48,12 +48,15 @@ usage:
   mox --prefill          one-time seed: metadata for the whole inbox + full
                          bodies for offline_categories, then exit
   mox --stats            print a snapshot of the local store, then exit
+  mox --headless         sync forever with no TUI (also via headless: true in
+                         config.yaml); runs until killed
   mox upgrade            download + install the latest release in place
   mox --version, -v      print the version and exit
   mox --help, -h         print this help and exit
   mox mcp                serve MCP on stdio (for Claude Code), then exit on EOF
 
-config + database live in ~/Documents/mox (override with $MOX_CONFIG / $MOX_DB).`);
+config + database live in ~/Documents/mox (override with data_dir in config.yaml,
+or $MOX_CONFIG / $MOX_DB).`);
   process.exit(0);
 }
 
@@ -80,7 +83,6 @@ if (args[0] === "upgrade") {
 // Locate config + db (shared with mcp.ts). Installed builds keep both
 // in ~/Documents/mox; running from source uses the repo root. See ./paths.ts.
 const cfgPath = resolveCfgPath();
-const dbPath = resolveDbPath(cfgPath);
 
 if (!existsSync(cfgPath)) {
   // Best-effort: create the folders so the user has somewhere to drop the config.
@@ -96,7 +98,28 @@ if (!existsSync(cfgPath)) {
   );
   process.exit(1);
 }
-// dbPath is created on first run if absent.
+
+// The config decides where the database lives (`data_dir`), so it has to be read
+// before the path — and a malformed one must report a readable line rather than
+// a stack trace through the minified bundle, on every entry point including the
+// `mox mcp` stream, where only stderr and the exit code reach Claude Code.
+let bootCfg: Config;
+try {
+  bootCfg = loadConfig(cfgPath);
+} catch (e) {
+  console.error(`mox: cannot read ${cfgPath} — ${e instanceof Error ? e.message : String(e)}`);
+  process.exit(1);
+}
+const dbPath = resolveDbPath(cfgPath, bootCfg);
+// dbPath is created on first run if absent — but only inside a folder that
+// exists, and a data_dir pointing somewhere new is exactly the case where it
+// does not. Best-effort: an unwritable path still fails later with SQLite's own
+// message, which names the path.
+if (bootCfg.dataDir) {
+  try {
+    mkdirSync(dirname(dbPath), { recursive: true });
+  } catch {}
+}
 
 // Snapshot the store before anything starts writing to it (see ./backup.ts).
 // No-op unless one is due, and best-effort: a full disk or an unwritable folder
@@ -105,7 +128,7 @@ if (!existsSync(cfgPath)) {
 // triages through the same backend()), `--reclassify` and `--prefill`. The
 // read-only `--stats` is the one command that does not need it. Warnings go to
 // stderr, so the MCP protocol stream on stdout stays clean.
-function startBackups(cfg: Config = loadConfig(cfgPath)): void {
+function startBackups(cfg: Config = bootCfg): void {
   const first = maybeBackup(dbPath, cfg);
   if (first.error) console.warn(`mox: backup skipped — ${first.error}`);
 
@@ -120,7 +143,7 @@ function startBackups(cfg: Config = loadConfig(cfgPath)): void {
 // config.yaml — adding a domain/word files matching mail; removing one drops the
 // now-unmatched mail back to Uncategorized. No network, no config beyond load.
 if (args.includes("--reclassify")) {
-  const cfg = loadConfig(cfgPath);
+  const cfg = bootCfg;
   startBackups(cfg);
   const store = new Store(dbPath);
   const { filed, unfiled, scanned } = reclassifyAll(store, cfg);
@@ -172,7 +195,7 @@ if (args.includes("--stats")) {
 // over the whole INBOX (searchable offline) and cache full bodies for the
 // offline categories, then exit. Normal launch fetches only `fetch_limit`.
 if (args.includes("--prefill")) {
-  const cfg = loadConfig(cfgPath);
+  const cfg = bootCfg;
   startBackups(cfg);
   const store = new Store(dbPath);
 
@@ -268,6 +291,51 @@ if (args.includes("--prefill")) {
   if (!ok) w(`\n  ${paint("→ run", C.dim)} ${paint("mox --prefill", C.bold)} ${paint("again to finish (it resumes where it stopped)", C.dim)}\n`);
   w("\n");
   process.exit(failed.length ? 1 : 0);
+}
+
+// Headless daemon: `headless: true` in config.yaml (or `mox --headless`) runs
+// the same sync the TUI runs on its timer, forever, with no terminal — for a
+// server that should keep the local store current with no one attached. It
+// never exits on its own: stop it with Ctrl-C or `kill`. `mox mcp` keeps its
+// own path, so a headless config still serves MCP normally.
+if (args[0] !== "mcp" && (args.includes("--headless") || bootCfg.headless)) {
+  const cfg = bootCfg;
+  startBackups(cfg);
+  const store = new Store(dbPath);
+  const { backend } = await import("./backend.ts");
+  const be = backend(store, cfg);
+
+  const stamp = () => new Date().toISOString().replace("T", " ").slice(0, 19);
+  const log = (s: string) => process.stdout.write(`${stamp()}  ${s}\n`);
+
+  // One clean shutdown path for both signals: close the store (checkpoints the
+  // WAL) so the database a later TUI or `--stats` opens is never mid-write.
+  let stopping = false;
+  const shutdown = (sig: string) => {
+    if (stopping) return;
+    stopping = true;
+    log(`${sig} — stopping`);
+    store.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+  log(`mox ${pkg.version} headless — ${cfg.accounts.length} account(s), every ${cfg.headlessEverySeconds}s`);
+  log(`db ${dbPath}`);
+
+  // Sequential loop rather than setInterval: a sync slower than the interval
+  // must delay the next one, never stack a second concurrent IMAP pass.
+  while (!stopping) {
+    const t0 = Date.now();
+    const r = await be.sync();
+    const ms = Date.now() - t0;
+    // Quiet by default — a line only when mail actually moved or a sync failed,
+    // so a log left running for weeks stays readable.
+    if (!r.ok) log(`sync failed — ${r.out}`);
+    else if ((r.out.match(/\d+/g) ?? []).some((n) => Number(n) > 0)) log(`${r.out} (${ms}ms)`);
+    await new Promise((res) => setTimeout(res, cfg.headlessEverySeconds * 1000));
+  }
 }
 
 // `mox mcp`: serve the MCP tools over stdio. mcp.ts is its own entry file, so a

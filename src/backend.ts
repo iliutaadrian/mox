@@ -436,7 +436,7 @@ export function backend(store: Store, cfg: Config) {
           return `${dir === home || dir.startsWith(home + "/") ? "~" + dir.slice(home.length) : dir}/`;
         };
 
-        const base = resolveAttachmentsDir(resolveCfgPath());
+        const base = resolveAttachmentsDir(resolveCfgPath(), cfg);
         mkdirSync(base, { recursive: true });
 
         // Idempotency check happens before any IMAP call: a non-empty folder

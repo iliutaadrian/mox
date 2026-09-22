@@ -211,9 +211,10 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     renderer.requestRender();
   });
 
-  // Auto-refresh the INBOX every 10s. Quiet: skips while a manual action is
-  // running or a modal/search is open, never overlaps itself, and only bumps
-  // the view (re-render) when the fetch actually changed something.
+  // Auto-refresh the INBOX on the refresh_every_seconds tick (10s by default).
+  // Quiet: skips while a manual action is running or a modal/search is open,
+  // never overlaps itself, and only bumps the view (re-render) when the fetch
+  // actually changed something.
   onMount(() => {
     let inFlight = false;
     const id = setInterval(async () => {
@@ -233,7 +234,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       } finally {
         inFlight = false;
       }
-    }, 10_000);
+    }, cfg.refreshEverySeconds * 1000);
     onCleanup(() => clearInterval(id));
   });
 

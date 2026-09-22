@@ -1,6 +1,11 @@
 # mox configuration.
 # Dev: copy to ./config.yaml at the repo root.
 # Installed: copy to ~/Documents/mox/config.yaml.
+#
+# Sections below are the order every mox config follows: sync, storage,
+# interface, filing. Key order is documentation only; mox reads keys by name.
+
+# --- sync -------------------------------------------------------------------
 
 # On a cold mailbox, how many recent messages to pull per account WITH FULL
 # CONTENT (body + HTML + attachment metadata). This is all a normal launch pulls.
@@ -19,23 +24,47 @@ fetch_limit: 200
 # opened (keeps the local DB small). 0 disables pruning. Default 90.
 content_days: 90
 
-# Categories kept fully cached offline (bodies never pruned; backfilled by
-# `mox --prefill`).
-offline_categories: []
+# How often the TUI syncs the inbox in the background, in seconds. Lower = new
+# mail lands sooner and you hit the IMAP server more often.
+refresh_every_seconds: 10
+
+# Headless mode: `mox` runs the same sync the TUI runs on its timer, forever,
+# printing a timestamped line whenever mail moves — no terminal needed. For a
+# server that should keep the local store current with nobody attached. The
+# process never exits on its own; stop it with Ctrl-C or `kill`. `mox mcp`,
+# `--stats`, `--prefill` and `--reclassify` are unaffected. `mox --headless`
+# does the same for one run without editing this file.
+headless: false
+headless_every_seconds: 60
+
+# --- storage ----------------------------------------------------------------
+
+# Where the database and its Attachments/ folder live. This is the default for an
+# installed binary; a dev checkout uses the repo root. Point it at a mounted
+# volume or a server path to keep the store elsewhere. $MOX_DB overrides it for a
+# single run. `~` is expanded.
+data_dir: ~/Documents/mox
+
+# Snapshots of the local database. Categories, done flags and snooze times live
+# ONLY in that file — the mail server has no copy, so a lost database cannot be
+# re-synced. A snapshot is taken whenever the newest one is older than
+# backup_every_hours; only the backup_keep newest are kept.
+# backup_dir defaults to a backup/ folder next to the database; set it to keep
+# snapshots on another disk.
+backup_dir: ~/Documents/mox/backup
+backup_enabled: true
+backup_every_hours: 12
+backup_keep: 2
+
+# --- filing -----------------------------------------------------------------
 
 # Categories kept OUT of the INBOX and ALL views (still reachable via their own
 # sidebar entry). Use for noisy/muted buckets you never want in the main views.
 inbox_exclude: [Alerts, Muted]
 
-# Automatic snapshots of the local database into a `backup/` folder next to it
-# (~/Documents/mox/backup when installed, the repo root in dev). Categories, done
-# flags and snooze times live only in that file and are never stored on the mail
-# server, so a lost database cannot be re-synced. A snapshot is taken at startup
-# (and while running) whenever the newest existing one is older than
-# backup_every_hours; only the backup_keep newest are kept.
-backup_enabled: true
-backup_every_hours: 12
-backup_keep: 2
+# Categories kept fully cached offline (bodies never pruned; backfilled by
+# `mox --prefill`).
+offline_categories: []
 
 accounts:
   - name: Personal

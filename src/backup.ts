@@ -1,6 +1,6 @@
-// Scheduled local snapshots of the SQLite store, kept in a `backup/` folder next
-// to the database itself (~/Documents/mox/backup for an installed binary, the
-// repo root when running from source). The whole mailbox — categories, done
+// Scheduled local snapshots of the SQLite store, written to `backup_dir` from
+// the config — by default a `backup/` folder next to the database itself. The
+// whole mailbox — categories, done
 // flags, snooze times — lives ONLY in that one file and is never mirrored on the
 // mail server, so losing it is unrecoverable.
 //
@@ -21,9 +21,10 @@ export type BackupResult = {
   error?: string;
 };
 
-/** backupDir is always derived from the resolved db path, never hardcoded. */
-export function backupDir(dbPath: string): string {
-  return join(dirname(dbPath), "backup");
+/** backupDir is `backup_dir` from the config when set, otherwise derived from
+ * the resolved db path — never hardcoded. */
+export function backupDir(dbPath: string, cfg?: { backupDir?: string }): string {
+  return cfg?.backupDir || join(dirname(dbPath), "backup");
 }
 
 // Backups are named "<db stem>-YYYYMMDD-HHMMSS.db" (local time, so the name
@@ -47,8 +48,8 @@ function stamp(d: Date): string {
 export type BackupFile = { name: string; path: string; mtimeMs: number };
 
 /** listBackups returns this db's backups in the folder, newest first. */
-export function listBackups(dbPath: string): BackupFile[] {
-  const dir = backupDir(dbPath);
+export function listBackups(dbPath: string, cfg?: { backupDir?: string }): BackupFile[] {
+  const dir = backupDir(dbPath, cfg);
   if (!existsSync(dir)) return [];
   const { re } = pattern(dbPath);
   const out: BackupFile[] = [];
@@ -75,13 +76,13 @@ export function maybeBackup(dbPath: string, cfg: Config, now = Date.now()): Back
   try {
     if (!existsSync(dbPath)) return { made: false, pruned: 0 };
 
-    const existing = listBackups(dbPath);
+    const existing = listBackups(dbPath, cfg);
     const newest = existing[0];
     if (newest && now - newest.mtimeMs < cfg.backupEveryHours * 3_600_000) {
       return { made: false, pruned: 0 };
     }
 
-    const dir = backupDir(dbPath);
+    const dir = backupDir(dbPath, cfg);
     mkdirSync(dir, { recursive: true });
     const { stem } = pattern(dbPath);
     const target = join(dir, `${stem}-${stamp(new Date(now))}.db`);
@@ -101,17 +102,17 @@ export function maybeBackup(dbPath: string, cfg: Config, now = Date.now()): Back
       db.close();
     }
 
-    return { made: true, path: target, pruned: prune(dbPath, cfg.backupKeep) };
+    return { made: true, path: target, pruned: prune(dbPath, cfg.backupKeep, cfg) };
   } catch (e) {
     return { made: false, pruned: 0, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
 /** prune deletes all but the `keep` newest backups. Returns how many it removed. */
-export function prune(dbPath: string, keep: number): number {
+export function prune(dbPath: string, keep: number, cfg?: { backupDir?: string }): number {
   const n = Math.max(1, Math.floor(keep) || 1);
   let pruned = 0;
-  for (const f of listBackups(dbPath).slice(n)) {
+  for (const f of listBackups(dbPath, cfg).slice(n)) {
     try {
       rmSync(f.path, { force: true });
       pruned++;

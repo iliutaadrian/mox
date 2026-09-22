@@ -25,9 +25,10 @@ import { resolveCfgPath, resolveDbPath } from "./paths.ts";
 import pkg from "../package.json";
 
 const cfgPath = resolveCfgPath();
-const dbPath = resolveDbPath(cfgPath);
-const store = new Store(dbPath);
+// Config first: `data_dir` in it decides where the store lives.
 const cfg = loadConfig(cfgPath);
+const dbPath = resolveDbPath(cfgPath, cfg);
+const store = new Store(dbPath);
 const actions = backend(store, cfg);
 
 const server = new McpServer({ name: "mox", version: pkg.version });
