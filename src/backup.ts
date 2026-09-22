@@ -1,8 +1,7 @@
 // Scheduled local snapshots of the SQLite store, written to `backup_dir` from
 // the config — by default a `backup/` folder next to the database itself. The
-// whole mailbox — categories, done
-// flags, snooze times — lives ONLY in that one file and is never mirrored on the
-// mail server, so losing it is unrecoverable.
+// whole mailbox — categories, done flags, snooze times — lives ONLY in that one
+// file and is never mirrored on the mail server, so losing it is unrecoverable.
 //
 // The schedule carries no persisted state: "is a backup due" is answered by the
 // mtime of the newest file already in the folder, which stays correct across
