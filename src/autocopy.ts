@@ -1,7 +1,6 @@
 // The auto-copy step: given the mail a sync just inserted, put at most one
-// one-time code on the clipboard and announce it. Split out of the TUI so the
-// interface and `mox --code-demo` run the SAME path — a demo that reimplements
-// the thing it demonstrates proves nothing.
+// one-time code on the clipboard and announce it. Split out of the TUI so it
+// can be tested without driving a terminal.
 //
 // Deliberately not part of backend(): `mox --headless` calls backend.sync()
 // with nobody at the keyboard, and a daemon must never touch the clipboard.
@@ -18,7 +17,6 @@ export type CodeCopy = {
   source: "subject" | "body";
   copied: boolean;
   error: string; // clipboard failure reason, "" when it worked
-  notified: string[]; // delivery paths tried, [] when notifications are off
   status: string; // the line to show on the status bar
 };
 
@@ -44,12 +42,12 @@ export function copyArrivedCode(store: Store, cfg: Config, sinceId: number): Cod
     const sender = m.from_addr || "unknown sender";
     const r = copyToClipboard(hit.code);
     if (!r.ok) {
-      return { ...hit, sender, copied: false, error: r.error, notified: [], status: `login code ${hit.code} — clipboard error: ${r.error.slice(0, 80)}` };
+      return { ...hit, sender, copied: false, error: r.error, status: `login code ${hit.code} — clipboard error: ${r.error.slice(0, 80)}` };
     }
     // The banner is the point: this fires while you are in a browser, where the
     // status line is out of sight.
-    const notified = cfg.loginCodesNotify ? notify("mox", `${hit.code} copied · ${sender}`) : [];
-    return { ...hit, sender, copied: true, error: "", notified, status: `copied code ${hit.code} from ${sender}` };
+    if (cfg.loginCodesNotify) notify("mox", `${hit.code} copied · ${sender}`);
+    return { ...hit, sender, copied: true, error: "", status: `copied code ${hit.code} from ${sender}` };
   }
   return null;
 }

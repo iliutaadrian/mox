@@ -34,7 +34,7 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► OpenTUI/Solid TUI
 | `text.ts`      | Width-safe text fitting (string-width), emoji presentation normalization.                   |
 | `clipboard.ts` | System clipboard write via the first available platform tool (`pbcopy`/`wl-copy`/`xclip`/`xsel`). |
 | `codes.ts`     | One-time login code detection: gate phrases/words from config near a standalone 4-8 digit number. Pure. |
-| `autocopy.ts`  | The auto-copy step: scan what a sync just inserted, copy one code, announce it. Shared by the TUI and `--code-demo`. |
+| `autocopy.ts`  | The auto-copy step: scan what a sync just inserted, copy one code, announce it.              |
 | `notify.ts`    | Desktop notification: OSC 777 to the terminal, `terminal-notifier`, then `osascript`/`notify-send`. Fire-and-forget. |
 
 ---
@@ -97,7 +97,7 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 - A message qualifies when a gate word sits within ~120 characters of a standalone 4-8 digit number; the nearest number wins. URLs and HTML tags are excluded; a year counts only right beside the gate word (`your code is 2024`), never at prose distance (`learn to code in 2024`).
 - Two lists: `login_codes_words` are phrases matched in subject **and** body; `login_codes_subject_words` are bare words matched in the **subject only** (short and rarely numeric there, and the only way to catch `"479982 is your Facebook code"`). Measured over the local corpus: 45 hits across 31.5k messages, all genuine.
 - `login_codes` is the master switch (off unless literally `true`). `login_codes_auto_copy` copies a code the moment the mail lands, **TUI only** — never `--headless` (nobody at the keyboard) and never `--prefill`, and never on the first cold fill of a database (the whole backlog would qualify). One copy per sync, newest arrival wins, scanned over rows that sync actually inserted, so a code can never re-copy over something copied since.
-- `login_codes_notify` announces an auto-copy with a desktop banner carrying the code and sender — the status line is out of sight when this fires, since you are in a browser. Delivery is tried three ways (`notify.ts`): OSC 777 to the terminal (tmux-wrapped; terminals commonly suppress it while focused), `terminal-notifier` when installed, then `osascript`/`notify-send` — which exits 0 even when macOS silently drops the banner, hence `mox --notify-test`.
+- `login_codes_notify` announces an auto-copy with a desktop banner carrying the code and sender — the status line is out of sight when this fires, since you are in a browser. Delivery is tried three ways (`notify.ts`): OSC 777 to the terminal (tmux-wrapped; terminals commonly suppress it while focused), `terminal-notifier` when installed, then `osascript`/`notify-send` — which exits 0 even when macOS silently drops the banner, so its success proves nothing.
 - Both lists live in `config.yaml`, not in the source: the languages and services mox knows about are a file anyone can extend.
 - `yc` copies by hand from the selected message(s); it never notifies. Mail past `content_days` keeps no body, so `yc` falls back to the subject and says so.
 
@@ -110,8 +110,6 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 - `mox mcp` — MCP server on stdio: `get_inbox`, `search_emails`, `get_email`, `triage_emails`, `set_category`, `create_draft`, `download_attachments`.
   - `create_draft` also takes `attachments`, a list of absolute (or `~/`) paths. `backend.readAttachments` reads the bytes and guesses the content type from the extension, before any IMAP call — a path must resolve (symlinks included) under the home or temp directory, must not contain a hidden dotfile segment, and must be at most 20 MB, with the attachments of one draft capped at 25 MB in total; `compose.buildDraftMime` then wraps the multipart/alternative body in a multipart/mixed envelope, one part per file.
 - `mox --prefill` — whole-inbox metadata sweep + full bodies for the offline categories. The heavy seed.
-- `mox --notify-test` — fire a sample banner and report which delivery paths were tried.
-- `mox --code-demo` — inject a synthetic ANAF-style code mail, run the real arrival path through `autocopy.copyArrivedCode` (the same function the TUI's sync calls), print what was detected/copied/notified, then delete that one row by id in a `finally`. The generated code is random, and only the injected row is removed — never "everything since the marker", which on a live store can mean somebody's real mail.
 - `mox --reclassify` / `mox --stats` — re-file against current rules, or print a store snapshot. No network for either.
 - There is no separate CLI entry point. `r` in the TUI covers routine syncing (INBOX + Sent).
 

@@ -76,7 +76,8 @@ login_codes_auto_copy: true
 
 # Announce an auto-copy with a desktop banner carrying the code and the sender —
 # the status line is out of sight when this fires, since you are in a browser.
-# Pressing `yc` yourself never notifies. Verify it works with `mox --notify-test`.
+# Pressing `yc` yourself never notifies. A terminal usually suppresses its own
+# notification while its window is focused — which is not when you need it.
 login_codes_notify: true
 
 # Phrases, matched in the subject AND the body. Phrases, not single words,

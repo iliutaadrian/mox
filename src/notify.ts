@@ -15,31 +15,25 @@
 //   3. osascript / notify-send — the fallback. `osascript` exits 0 even when
 //      the notification is silently dropped (Script Editor not allowed to
 //      notify), so its success tells us nothing; it is tried last for that
-//      reason, and `mox --notify-test` exists because of it.
+//      reason.
 //
 // Fire-and-forget: a missing notifier is never worth an error on the status
 // line when the clipboard write — the part that matters — already succeeded.
 import { spawn, spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
-/** notify shows a desktop banner. Returns the paths it managed to use, for
- * `--notify-test`; callers on the hot path ignore it. */
-export function notify(title: string, body: string): string[] {
-  const used: string[] = [];
-  if (osc777(title, body)) used.push("osc777");
+/** notify shows a desktop banner, as far as this machine allows. */
+export function notify(title: string, body: string): void {
+  osc777(title, body);
   if (have("terminal-notifier")) {
     run("terminal-notifier", ["-title", title, "-message", body]);
-    used.push("terminal-notifier");
   } else if (process.platform === "darwin") {
     // Both strings go through AppleScript source as escaped literals in a
     // single -e program — never interpolated into a shell command.
     run("osascript", ["-e", `display notification ${quote(body)} with title ${quote(title)}`]);
-    used.push("osascript");
   } else {
     run("notify-send", [title, body]);
-    used.push("notify-send");
   }
-  return used;
 }
 
 // ESC ] 777 ; notify ; TITLE ; BODY BEL, written to the controlling terminal.
