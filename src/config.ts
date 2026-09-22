@@ -39,10 +39,11 @@ export type Config = {
   headlessEverySeconds: number; // seconds between syncs in headless mode
   refreshEverySeconds: number; // seconds between the TUI's background inbox syncs
   dataDir: string; // where the database + Attachments/ live; "" = the built-in default
-  loginCodeWords: string[]; // gate phrases for one-time codes, matched in subject and body
-  loginCodeSubjectWords: string[]; // bare gate words, matched in the subject only
-  loginCodeAutoCopy: boolean; // copy a code to the clipboard as soon as the mail arrives (TUI only)
-  loginCodeNotify: boolean; // announce an auto-copied code with a desktop notification
+  loginCodes: boolean; // master switch for one-time login codes (auto-copy + the `yc` key)
+  loginCodesAutoCopy: boolean; // copy a code to the clipboard as soon as the mail arrives (TUI only)
+  loginCodesNotify: boolean; // announce an auto-copied code with a desktop notification
+  loginCodesWords: string[]; // gate phrases, matched in subject and body
+  loginCodesSubjectWords: string[]; // bare gate words, matched in the subject only
 };
 
 // A positive number from config, falling back to `def` for missing/garbage/<=0
@@ -106,14 +107,15 @@ export function loadConfig(path: string): Config {
     headlessEverySeconds: Math.floor(positive(raw.headless_every_seconds, 60)),
     refreshEverySeconds: Math.floor(positive(raw.refresh_every_seconds, 10)),
     dataDir: expandPath(raw.data_dir),
-    // No built-in lists: an absent (or emptied) login_codes block turns both the
-    // auto-copy and the `yc` key off, which is the documented way to opt out.
-    loginCodeWords: words(raw.login_codes?.words),
-    loginCodeSubjectWords: words(raw.login_codes?.subject_words),
-    // Both on unless explicitly disabled — a block written without them is a
-    // block that wants the feature.
-    loginCodeAutoCopy: raw.login_codes?.auto_copy !== false,
-    loginCodeNotify: raw.login_codes?.notify !== false,
+    // Off unless asked for: this writes to the system clipboard on its own, so a
+    // config that never mentions it must never have it fire. The sub-switches
+    // are on unless explicitly disabled, and mean nothing while the master is
+    // off — same shape as headless / headless_every_seconds.
+    loginCodes: raw.login_codes === true,
+    loginCodesAutoCopy: raw.login_codes_auto_copy !== false,
+    loginCodesNotify: raw.login_codes_notify !== false,
+    loginCodesWords: words(raw.login_codes_words),
+    loginCodesSubjectWords: words(raw.login_codes_subject_words),
   };
 }
 

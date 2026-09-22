@@ -120,41 +120,53 @@ describe("backup_dir", () => {
 describe("login_codes", () => {
   // The word list is the on/off switch: there is no built-in set behind it, so
   // a config written before this feature existed must leave it fully dormant.
-  test("an absent block means no words and nothing fires", () => {
+  test("an absent key leaves the master switch off", () => {
     const cfg = loadConfig(write("accounts: []\n"));
-    expect(cfg.loginCodeWords).toEqual([]);
+    expect(cfg.loginCodes).toBe(false);
+    expect(cfg.loginCodesWords).toEqual([]);
   });
 
-  test("words are read, trimmed and emptied entries dropped", () => {
-    const cfg = loadConfig(write("login_codes:\n  words: ['  cod ', code, '']\n"));
-    expect(cfg.loginCodeWords).toEqual(["cod", "code"]);
+  test("the master switch is off unless it is literally true", () => {
+    expect(loadConfig(write("login_codes: false\n")).loginCodes).toBe(false);
+    // YAML 1.2 (what the `yaml` package parses) keeps bare `yes` and a quoted
+    // `"true"` as STRINGS, so neither turns a clipboard-writing feature on.
+    expect(loadConfig(write("login_codes: yes\n")).loginCodes).toBe(false);
+    expect(loadConfig(write('login_codes: "true"\n')).loginCodes).toBe(false);
+    expect(loadConfig(write("login_codes: true\n")).loginCodes).toBe(true);
   });
 
-  test("auto_copy and notify default on when the block exists", () => {
-    const cfg = loadConfig(write("login_codes:\n  words: [code]\n"));
-    expect(cfg.loginCodeAutoCopy).toBe(true);
-    expect(cfg.loginCodeNotify).toBe(true);
+  test("words are read, trimmed, lowercased and emptied entries dropped", () => {
+    const cfg = loadConfig(write("login_codes_words: ['  Cod ', code, '']\n"));
+    expect(cfg.loginCodesWords).toEqual(["cod", "code"]);
   });
 
-  test("either switch can be turned off on its own", () => {
-    const cfg = loadConfig(write("login_codes:\n  words: [code]\n  auto_copy: false\n  notify: false\n"));
-    expect(cfg.loginCodeAutoCopy).toBe(false);
-    expect(cfg.loginCodeNotify).toBe(false);
+  test("auto_copy and notify default on", () => {
+    const cfg = loadConfig(write("login_codes: true\n"));
+    expect(cfg.loginCodesAutoCopy).toBe(true);
+    expect(cfg.loginCodesNotify).toBe(true);
+  });
+
+  test("either behaviour can be turned off on its own", () => {
+    const cfg = loadConfig(write("login_codes: true\nlogin_codes_auto_copy: false\nlogin_codes_notify: false\n"));
+    expect(cfg.loginCodes).toBe(true);
+    expect(cfg.loginCodesAutoCopy).toBe(false);
+    expect(cfg.loginCodesNotify).toBe(false);
   });
 
   // The lists are config, not constants in codes.ts: anyone can add a word for
   // a service or a language mox has never seen without touching the source.
   test("both lists reach the detector from config alone", () => {
-    const cfg = loadConfig(write("login_codes:\n  words: [mot de passe]\n  subject_words: [kod]\n"));
-    expect(cfg.loginCodeWords).toEqual(["mot de passe"]);
-    expect(cfg.loginCodeSubjectWords).toEqual(["kod"]);
+    const cfg = loadConfig(write("login_codes_words: [mot de passe]\nlogin_codes_subject_words: [kod]\n"));
+    expect(cfg.loginCodesWords).toEqual(["mot de passe"]);
+    expect(cfg.loginCodesSubjectWords).toEqual(["kod"]);
   });
 
   test("the shipped example config parses with the feature on", () => {
     const cfg = loadConfig("config.example.yaml");
-    expect(cfg.loginCodeWords.length).toBeGreaterThan(10);
-    expect(cfg.loginCodeSubjectWords.length).toBeGreaterThan(0);
-    expect(cfg.loginCodeAutoCopy).toBe(true);
-    expect(cfg.loginCodeNotify).toBe(true);
+    expect(cfg.loginCodes).toBe(true);
+    expect(cfg.loginCodesWords.length).toBeGreaterThan(10);
+    expect(cfg.loginCodesSubjectWords.length).toBeGreaterThan(0);
+    expect(cfg.loginCodesAutoCopy).toBe(true);
+    expect(cfg.loginCodesNotify).toBe(true);
   });
 });

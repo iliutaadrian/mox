@@ -63,41 +63,43 @@ backup_keep: 2
 # nearest a gate word wins. URLs and HTML tags are ignored, and a year only
 # counts right beside a gate word ("your code is 2024"), never in prose.
 #
-# auto_copy: a qualifying arrival is copied to the clipboard the moment it lands
-#   and `notify` announces it with a desktop banner naming the sender — you
-#   switch to the browser and paste. Interface only: never in --headless (nobody
-#   is at the keyboard), never in --prefill, and never on the first cold fill of
-#   a new database (the whole 2FA backlog would qualify). One copy per sync,
-#   newest arrival wins. With auto_copy off, `yc` still works by hand.
-#
-# The two lists are what makes this work in your languages and for your
-# services — add to them whenever a sender is missed:
-#
-# words: phrases, matched in the subject AND the body. Phrases, not single
-#   words, because a body is long: over a real 31k-message mailbox, bare words
-#   there turn ordinary mail into hits (a fiscal code beside "cod", a year
-#   beside "verificare").
-# subject_words: single words, matched in the SUBJECT only — subjects are short
-#   and rarely numeric, so a bare word is safe, and it is the only thing that
-#   catches subjects like "479982 is your Facebook code". Keep collisions out of
-#   this list ("otp" is also Bucharest's airport and a bank).
-#
-# Empty BOTH lists (or delete the block) to switch the whole feature off.
-login_codes:
-  auto_copy: true
-  notify: true
-  words:
-    [
-      verification code, confirmation code, security code, login code,
-      sign in code, sign-in code, one-time code, one time code,
-      one-time password, one-time passcode, access code, activation code,
-      authentication code, recovery code, your code, code is, otp code,
-      cod de siguranta, cod de siguranță, cod de verificare, cod verificare,
-      cod de autentificare, cod autentificare, cod de acces, cod de activare,
-      cod otp, codul tău este, codul tau este, codul tău de activare,
-      codul tau de activare, parola unica,
-    ]
-  subject_words: [code, codes, cod, codul, 2fa, passcode]
+# The master switch. Off unless set true: this writes to your clipboard on its
+# own, so a config that never mentions it never fires.
+login_codes: true
+
+# Copy a qualifying arrival to the clipboard the moment it lands. Interface
+# only: never in --headless (nobody is at the keyboard), never in --prefill, and
+# never on the first cold fill of a new database (the whole 2FA backlog would
+# qualify). One copy per sync, newest arrival wins. With this false, `yc` still
+# copies a code by hand whenever you press it.
+login_codes_auto_copy: true
+
+# Announce an auto-copy with a desktop banner carrying the code and the sender —
+# the status line is out of sight when this fires, since you are in a browser.
+# Pressing `yc` yourself never notifies. Verify it works with `mox --notify-test`.
+login_codes_notify: true
+
+# Phrases, matched in the subject AND the body. Phrases, not single words,
+# because a body is long: over a real 31k-message mailbox, bare words there turn
+# ordinary mail into hits (a fiscal code beside "cod", a year beside
+# "verificare"). Add to this list whenever a sender of yours is missed.
+login_codes_words:
+  [
+    verification code, confirmation code, security code, login code,
+    sign in code, sign-in code, one-time code, one time code,
+    one-time password, one-time passcode, access code, activation code,
+    authentication code, recovery code, your code, code is, otp code,
+    cod de siguranta, cod de siguranță, cod de verificare, cod verificare,
+    cod de autentificare, cod autentificare, cod de acces, cod de activare,
+    cod otp, codul tău este, codul tau este, codul tău de activare,
+    codul tau de activare, parola unica,
+  ]
+
+# Single words, matched in the SUBJECT only. Subjects are short and rarely
+# numeric, so a bare word is safe there — and it is the only thing that catches
+# a subject like "479982 is your Facebook code", which no phrase list can
+# enumerate. Keep collisions out ("otp" is also Bucharest's airport and a bank).
+login_codes_subject_words: [code, codes, cod, codul, 2fa, passcode]
 
 # --- filing -----------------------------------------------------------------
 

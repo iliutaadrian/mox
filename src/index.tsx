@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 
 import { maybeBackup } from "./backup.ts";
 import { Store } from "./db.ts";
+import { notify } from "./notify.ts";
 import { type Config, loadConfig } from "./config.ts";
 import { prefill, reclassifyAll } from "./engine.ts";
 import { DATA_DIR, resolveCfgPath, resolveDbPath } from "./paths.ts";
@@ -48,6 +49,8 @@ usage:
   mox --prefill          one-time seed: metadata for the whole inbox + full
                          bodies for offline_categories, then exit
   mox --stats            print a snapshot of the local store, then exit
+  mox --notify-test      fire a sample login-code banner, report what was
+                         tried, then exit
   mox --headless         sync forever with no TUI (also via headless: true in
                          config.yaml); runs until killed
   mox upgrade            download + install the latest release in place
@@ -136,6 +139,22 @@ function startBackups(cfg: Config = bootCfg): void {
   // maybeBackup returns immediately until the schedule comes due. unref so the
   // timer never holds the process open — the one-shot commands exit regardless.
   setInterval(() => maybeBackup(dbPath, cfg), 60 * 60 * 1000).unref();
+}
+
+// `mox --notify-test`: fire the same banner an auto-copied code fires, and say
+// which delivery paths were used. Exists because the macOS fallback (osascript)
+// exits 0 even when the notification is silently dropped, so "it ran" and "you
+// saw it" are different questions and only a human can answer the second.
+if (args.includes("--notify-test")) {
+  const used = notify("mox", "735470 copied · autentificare.spatiuprivat@anaf.ro");
+  console.log(`tried: ${used.join(", ") || "nothing (no delivery path available)"}`);
+  console.log(
+    "No banner? A terminal usually suppresses its own OSC notification while its window is FOCUSED —\n" +
+      "switch to another app and run this again. If it is still silent, check System Settings →\n" +
+      "Notifications for your terminal (and for Script Editor, which is what plain osascript shows as),\n" +
+      "or `brew install terminal-notifier`, which mox prefers when it is present.",
+  );
+  process.exit(0);
 }
 
 // `mox --reclassify`: re-apply the current config rules to every INBOX message

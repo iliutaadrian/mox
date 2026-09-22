@@ -135,8 +135,8 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const store = new Store(props.dbPath);
   const cfg: Config = loadConfig(props.cfgPath);
   const be = backend(store, cfg);
-  // Off entirely when config declares no gate words in either list.
-  const codesOn = () => cfg.loginCodeWords.length > 0 || cfg.loginCodeSubjectWords.length > 0;
+  // The master switch, plus the words it needs to match anything at all.
+  const codesOn = () => cfg.loginCodes && (cfg.loginCodesWords.length > 0 || cfg.loginCodesSubjectWords.length > 0);
 
   const [version, setVersion] = createSignal(0); // bump after writes to re-query
   const [catIdx, setCatIdx] = createSignal(0);
@@ -238,16 +238,16 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   // already held inserts nothing, so a code can never land on the clipboard a
   // second time, on top of something copied since. Returns the status text.
   function autoCopyCode(sinceId: number): string {
-    if (!codesOn() || !cfg.loginCodeAutoCopy) return "";
+    if (!codesOn() || !cfg.loginCodesAutoCopy) return "";
     for (const m of store.arrivedAfter(sinceId)) {
-      const hit = findLoginCode(m.subject, m.body || m.html, cfg.loginCodeWords, cfg.loginCodeSubjectWords);
+      const hit = findLoginCode(m.subject, m.body || m.html, cfg.loginCodesWords, cfg.loginCodesSubjectWords);
       if (!hit) continue;
       const sender = m.from_addr || "unknown sender";
       const r = copyToClipboard(hit.code);
       if (!r.ok) return `login code ${hit.code} — clipboard error: ${r.error.slice(0, 80)}`;
       // The banner is the point: this fires while you are in a browser, where
       // the status line below is out of sight.
-      if (cfg.loginCodeNotify) notify("mox", `${hit.code} copied · ${sender}`);
+      if (cfg.loginCodesNotify) notify("mox", `${hit.code} copied · ${sender}`);
       return `copied code ${hit.code} from ${sender}`;
     }
     return "";
@@ -547,13 +547,13 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     const rows = copyRows();
     if (!rows.length) return;
     if (!codesOn()) {
-      setStatus("login codes off — add login_codes.words to config.yaml");
+      setStatus("login codes off — set login_codes: true in config.yaml");
       return;
     }
     const hits = rows.map((r) => {
       const cache = bodyCache.get(r.id);
       const body = r.body.trim() || cache?.body || r.html.trim() || cache?.html || "";
-      return { row: r, hit: findLoginCode(r.subject, body, cfg.loginCodeWords, cfg.loginCodeSubjectWords) };
+      return { row: r, hit: findLoginCode(r.subject, body, cfg.loginCodesWords, cfg.loginCodesSubjectWords) };
     });
     const found = hits.filter((h) => h.hit !== null);
     if (!found.length) {

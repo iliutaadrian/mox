@@ -10,9 +10,9 @@ import { findLoginCode } from "../src/codes.ts";
 // The word list is config, not code (absent config = feature off), so the
 // fixtures run against the list mox actually ships rather than a copy that can
 // drift away from it.
-const shipped = parse(readFileSync("config.example.yaml", "utf8")).login_codes;
-const words: string[] = shipped.words;
-const subjectWords: string[] = shipped.subject_words;
+const shipped = parse(readFileSync("config.example.yaml", "utf8"));
+const words: string[] = shipped.login_codes_words;
+const subjectWords: string[] = shipped.login_codes_subject_words;
 const find = (subject: string, body = "") => findLoginCode(subject, body, words, subjectWords);
 
 describe("shipped word lists", () => {
