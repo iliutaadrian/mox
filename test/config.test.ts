@@ -116,3 +116,35 @@ describe("backup_dir", () => {
     expect(loadConfig(write("backup_dir: ~/mox-backups\n")).backupDir).toBe(join(homedir(), "mox-backups"));
   });
 });
+
+describe("login_codes", () => {
+  // The word list is the on/off switch: there is no built-in set behind it, so
+  // a config written before this feature existed must leave it fully dormant.
+  test("an absent block means no words and nothing fires", () => {
+    const cfg = loadConfig(write("accounts: []\n"));
+    expect(cfg.loginCodeWords).toEqual([]);
+  });
+
+  test("words are read, trimmed and emptied entries dropped", () => {
+    const cfg = loadConfig(write("login_codes:\n  words: ['  cod ', code, '']\n"));
+    expect(cfg.loginCodeWords).toEqual(["cod", "code"]);
+  });
+
+  test("auto_copy and notify default on when the block exists", () => {
+    const cfg = loadConfig(write("login_codes:\n  words: [code]\n"));
+    expect(cfg.loginCodeAutoCopy).toBe(true);
+    expect(cfg.loginCodeNotify).toBe(true);
+  });
+
+  test("either switch can be turned off on its own", () => {
+    const cfg = loadConfig(write("login_codes:\n  words: [code]\n  auto_copy: false\n  notify: false\n"));
+    expect(cfg.loginCodeAutoCopy).toBe(false);
+    expect(cfg.loginCodeNotify).toBe(false);
+  });
+
+  test("the shipped example config parses with the feature on", () => {
+    const cfg = loadConfig("config.example.yaml");
+    expect(cfg.loginCodeWords.length).toBeGreaterThan(10);
+    expect(cfg.loginCodeAutoCopy).toBe(true);
+  });
+});

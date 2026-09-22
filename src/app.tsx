@@ -23,6 +23,8 @@ import { warmConnections } from "./mail.ts";
 import { fit, oneLine, tidyCopy } from "./text.ts";
 import { renderEmail, filterLinks, type RenderedEmail, type LinkRef } from "./links.ts";
 import { copyToClipboard } from "./clipboard.ts";
+import { findLoginCode } from "./codes.ts";
+import { notify } from "./notify.ts";
 
 const SIDEBAR_W = 26;
 const PAGE = 200; // lazy-load window: rows fetched per view, grown as you scroll down
@@ -133,6 +135,8 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const store = new Store(props.dbPath);
   const cfg: Config = loadConfig(props.cfgPath);
   const be = backend(store, cfg);
+  // Detection is off entirely when config declares no gate words at all.
+  const codesOn = () => cfg.loginCodeWords.length > 0 || cfg.loginCodeSubjectWords.length > 0;
 
   const [version, setVersion] = createSignal(0); // bump after writes to re-query
   const [catIdx, setCatIdx] = createSignal(0);
@@ -211,6 +215,38 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     renderer.requestRender();
   });
 
+  // Sync, then scan whatever just arrived for a one-time login code. Lives here
+  // rather than in backend.sync() on purpose: `mox --headless` calls the same
+  // backend with nobody at the keyboard, and auto-copy is only meaningful when
+  // a human is sitting in the TUI. A copy takes over the result line, since it
+  // is the more useful thing to say about that sync.
+  async function syncMail() {
+    const before = store.maxMessageId();
+    const r = await be.sync();
+    const copied = r.ok ? autoCopyCode(before) : "";
+    return copied ? { ok: true, out: copied } : r;
+  }
+
+  // One copy per sync, newest qualifying arrival wins. Scanning only rows
+  // inserted by this sync is what makes it exactly-once: a re-fetch of mail
+  // already held inserts nothing, so a code can never land on the clipboard a
+  // second time, on top of something copied since. Returns the status text.
+  function autoCopyCode(sinceId: number): string {
+    if (!codesOn() || !cfg.loginCodeAutoCopy) return "";
+    for (const m of store.arrivedAfter(sinceId)) {
+      const hit = findLoginCode(m.subject, m.body || m.html, cfg.loginCodeWords, cfg.loginCodeSubjectWords);
+      if (!hit) continue;
+      const sender = m.from_addr || "unknown sender";
+      const r = copyToClipboard(hit.code);
+      if (!r.ok) return `login code ${hit.code} — clipboard error: ${r.error.slice(0, 80)}`;
+      // The banner is the point: this fires while you are in a browser, where
+      // the status line below is out of sight.
+      if (cfg.loginCodeNotify) notify("mox", `${hit.code} copied · ${sender}`);
+      return `copied code ${hit.code} from ${sender}`;
+    }
+    return "";
+  }
+
   // Auto-refresh the INBOX on the refresh_every_seconds tick (10s by default).
   // Quiet: skips while a manual action is running or a modal/search is open,
   // never overlaps itself, and only bumps the view (re-render) when the fetch
@@ -221,7 +257,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       if (inFlight || busy() || typing() || picker() !== null || linkPicker() !== null || copy() !== null) return;
       inFlight = true;
       try {
-        const r = await be.sync();
+        const r = await syncMail();
         if (r.ok) setLastSync(Date.now());
         // out looks like "fetched N, filed M by rules" — only redraw on change.
         const nums = r.out.match(/\d+/g)?.map(Number) ?? [];
@@ -497,6 +533,31 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     copyOut(value, label);
   }
 
+  // `c`: the one-time login code. Follows the multi-selection like the other
+  // field copies. Mail past content_days keeps no body, so the scan falls back
+  // to whatever the session cached on open, and the subject always counts.
+  function copyCode() {
+    const rows = copyRows();
+    if (!rows.length) return;
+    if (!codesOn()) {
+      setStatus("login codes off — add login_codes.words to config.yaml");
+      return;
+    }
+    const hits = rows.map((r) => {
+      const cache = bodyCache.get(r.id);
+      const body = r.body.trim() || cache?.body || r.html.trim() || cache?.html || "";
+      return { row: r, hit: findLoginCode(r.subject, body, cfg.loginCodeWords, cfg.loginCodeSubjectWords) };
+    });
+    const found = hits.filter((h) => h.hit !== null);
+    if (!found.length) {
+      const pruned = hits.some(({ row }) => !row.body.trim() && !row.html.trim() && !bodyCache.get(row.id));
+      setStatus(pruned ? "no code in subject (body not cached — open the email first)" : "no login code found");
+      return;
+    }
+    const codes = found.map((h) => h.hit!.code);
+    copyOut(codes.join("\n"), codes.length > 1 ? `${codes.length} codes` : `code ${codes[0]}`);
+  }
+
   // `a`: everything. In the reader that's the open email as shown (headers +
   // body); from the list it's one tab-separated row per target.
   function copyAll() {
@@ -651,6 +712,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
         if (c.line !== null) copySelection();
         else copyAll();
       } else if (ch === "i") copyField("id");
+      else if (ch === "c") copyCode();
       else if (ch === "f") copyField("from");
       else if (ch === "s") copyField("subject");
       else if (ch === "a") copyAll();
@@ -783,7 +845,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     } else if (name === "escape") setSelected(new Set<number>());
     else if (ch === "r")
       void doBackend("Fetching new mail", async () => {
-        const r = await be.sync();
+        const r = await syncMail();
         if (r.ok) setLastSync(Date.now());
         return r;
       });
@@ -883,10 +945,10 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     const c = copy();
     if (c) {
       // Kept under 80 cells so the whole hint survives on a narrow terminal.
-      if (c.line === null) return `COPY · i id · f from · s subj · a row · esc`;
+      if (c.line === null) return `COPY · i id · f from · s subj · c code · a row · esc`;
       return c.anchor
         ? `COPY · hjkl extend · SELECTING · y copy · esc cancel`
-        : `COPY · hjkl move · v select · y line · i/f/s/a fields · esc`;
+        : `COPY · hjkl move · v select · y line · i/f/s/c/a fields · esc`;
     }
     return mode() === "reading"
       ? `j/k scroll · d/u page · g/G ends · h/l prev/next · v html${readingRendered().links.length ? " · o links" : ""} · y copy${hasAtts() ? " · s save files" : ""} · ${actionHint()} · M/U read · esc/q back`

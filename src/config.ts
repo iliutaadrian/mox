@@ -39,6 +39,10 @@ export type Config = {
   headlessEverySeconds: number; // seconds between syncs in headless mode
   refreshEverySeconds: number; // seconds between the TUI's background inbox syncs
   dataDir: string; // where the database + Attachments/ live; "" = the built-in default
+  loginCodeWords: string[]; // gate phrases for one-time codes, matched in subject and body
+  loginCodeSubjectWords: string[]; // bare gate words, matched in the subject only
+  loginCodeAutoCopy: boolean; // copy a code to the clipboard as soon as the mail arrives (TUI only)
+  loginCodeNotify: boolean; // announce an auto-copied code with a desktop notification
 };
 
 // A positive number from config, falling back to `def` for missing/garbage/<=0
@@ -46,6 +50,12 @@ export type Config = {
 function positive(v: unknown, def: number): number {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : def;
+}
+
+// Gate words, lowercased and trimmed: they are matched case-insensitively, and
+// a stray blank entry would otherwise match everywhere.
+function words(v: unknown): string[] {
+  return (Array.isArray(v) ? v : []).map((w) => String(w).trim().toLowerCase()).filter(Boolean);
 }
 
 /** expandPath turns a user-written path into an absolute one: `~` is the home
@@ -96,6 +106,14 @@ export function loadConfig(path: string): Config {
     headlessEverySeconds: Math.floor(positive(raw.headless_every_seconds, 60)),
     refreshEverySeconds: Math.floor(positive(raw.refresh_every_seconds, 10)),
     dataDir: expandPath(raw.data_dir),
+    // No built-in lists: an absent (or emptied) login_codes block turns both the
+    // auto-copy and the `yc` key off, which is the documented way to opt out.
+    loginCodeWords: words(raw.login_codes?.words),
+    loginCodeSubjectWords: words(raw.login_codes?.subject_words),
+    // Both on unless explicitly disabled — a block written without them is a
+    // block that wants the feature.
+    loginCodeAutoCopy: raw.login_codes?.auto_copy !== false,
+    loginCodeNotify: raw.login_codes?.notify !== false,
   };
 }
 
