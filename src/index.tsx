@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import { maybeBackup } from "./backup.ts";
 import { Store } from "./db.ts";
 import { notify } from "./notify.ts";
+import { codesEnabled, copyArrivedCode } from "./autocopy.ts";
 import { type Config, loadConfig } from "./config.ts";
 import { prefill, reclassifyAll } from "./engine.ts";
 import { DATA_DIR, resolveCfgPath, resolveDbPath } from "./paths.ts";
@@ -51,6 +52,8 @@ usage:
   mox --stats            print a snapshot of the local store, then exit
   mox --notify-test      fire a sample login-code banner, report what was
                          tried, then exit
+  mox --code-demo        inject a fake 2FA email, run the real arrival path
+                         (detect + copy + notify), remove it, then exit
   mox --headless         sync forever with no TUI (also via headless: true in
                          config.yaml); runs until killed
   mox upgrade            download + install the latest release in place
@@ -154,6 +157,65 @@ if (args.includes("--notify-test")) {
       "Notifications for your terminal (and for Script Editor, which is what plain osascript shows as),\n" +
       "or `brew install terminal-notifier`, which mox prefers when it is present.",
   );
+  process.exit(0);
+}
+
+// `mox --code-demo`: prove the whole auto-copy chain without waiting for a real
+// 2FA mail. A synthetic message is inserted into the local store, the SAME
+// function the TUI's sync calls picks it up, and the row is removed again in a
+// finally — the store is left exactly as it was found.
+if (args.includes("--code-demo")) {
+  const cfg = bootCfg;
+  const store = new Store(dbPath);
+  const marker = store.maxMessageId();
+  const uid = Date.now();
+  let injectedId = 0;
+  try {
+    const subject = "Cod de siguranta";
+    const from = "autentificare.spatiuprivat@anaf.ro";
+    // The code is generated, not fixed, so a demo run can never hand you a
+    // stale number that looks like a real one.
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    store.insertMessage({
+      account: "code-demo",
+      mailbox: "INBOX",
+      uid,
+      messageId: `<code-demo-${uid}@mox.local>`,
+      fromAddr: from,
+      fromName: "ANAF",
+      subject,
+      date: Math.floor(Date.now() / 1000),
+      snippet: "",
+      body: `Cod de siguranta: ${code}, expira dupa 300 secunde.`,
+      html: "",
+      attachments: [],
+      seen: false,
+    });
+    injectedId = store.messageIdOf("code-demo", "INBOX", uid);
+    console.log(`injected: "${subject}" from ${from}`);
+    if (!codesEnabled(cfg)) {
+      console.log("detected: — login codes are off (set login_codes: true in config.yaml)");
+    } else {
+      const hit = copyArrivedCode(store, cfg, marker);
+      if (!hit) {
+        console.log("detected: nothing — the shipped word lists did not claim it (login_codes_auto_copy off?)");
+      } else {
+        console.log(`detected: ${hit.code} [${hit.word}/${hit.source}]`);
+        console.log(`copied:   ${hit.copied ? "clipboard ok" : `FAILED — ${hit.error}`}`);
+        console.log(`notified: ${hit.notified.join(", ") || "off (login_codes_notify: false)"}`);
+        if (hit.copied) console.log(`\nPaste anywhere to confirm — it should read ${hit.code}.`);
+      }
+    }
+  } finally {
+    // Whatever happened above, the fake mail does not outlive this command —
+    // and only ever that one row: a sync running in another window may have
+    // inserted real mail since the marker was taken.
+    if (injectedId) {
+      store.deleteByIds([injectedId]);
+      console.log(`\ncleaned up: removed the injected row (id ${injectedId})`);
+    }
+    store.close();
+  }
   process.exit(0);
 }
 

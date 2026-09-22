@@ -24,7 +24,7 @@ import { fit, oneLine, tidyCopy } from "./text.ts";
 import { renderEmail, filterLinks, type RenderedEmail, type LinkRef } from "./links.ts";
 import { copyToClipboard } from "./clipboard.ts";
 import { findLoginCode } from "./codes.ts";
-import { notify } from "./notify.ts";
+import { codesEnabled, copyArrivedCode } from "./autocopy.ts";
 
 const SIDEBAR_W = 26;
 const PAGE = 200; // lazy-load window: rows fetched per view, grown as you scroll down
@@ -135,8 +135,6 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const store = new Store(props.dbPath);
   const cfg: Config = loadConfig(props.cfgPath);
   const be = backend(store, cfg);
-  // The master switch, plus the words it needs to match anything at all.
-  const codesOn = () => cfg.loginCodes && (cfg.loginCodesWords.length > 0 || cfg.loginCodesSubjectWords.length > 0);
 
   const [version, setVersion] = createSignal(0); // bump after writes to re-query
   const [catIdx, setCatIdx] = createSignal(0);
@@ -229,28 +227,8 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     const result = await be.sync();
     // A cold store fills in one sweep, so everything in it is "new" — including
     // 2FA mail from months ago. Nothing is copied off that first fill.
-    const copied = result.ok && before > 0 ? autoCopyCode(before) : "";
+    const copied = result.ok && before > 0 ? (copyArrivedCode(store, cfg, before)?.status ?? "") : "";
     return { result, copied };
-  }
-
-  // One copy per sync, newest qualifying arrival wins. Scanning only rows
-  // inserted by this sync is what makes it exactly-once: a re-fetch of mail
-  // already held inserts nothing, so a code can never land on the clipboard a
-  // second time, on top of something copied since. Returns the status text.
-  function autoCopyCode(sinceId: number): string {
-    if (!codesOn() || !cfg.loginCodesAutoCopy) return "";
-    for (const m of store.arrivedAfter(sinceId)) {
-      const hit = findLoginCode(m.subject, m.body || m.html, cfg.loginCodesWords, cfg.loginCodesSubjectWords);
-      if (!hit) continue;
-      const sender = m.from_addr || "unknown sender";
-      const r = copyToClipboard(hit.code);
-      if (!r.ok) return `login code ${hit.code} — clipboard error: ${r.error.slice(0, 80)}`;
-      // The banner is the point: this fires while you are in a browser, where
-      // the status line below is out of sight.
-      if (cfg.loginCodesNotify) notify("mox", `${hit.code} copied · ${sender}`);
-      return `copied code ${hit.code} from ${sender}`;
-    }
-    return "";
   }
 
   // Auto-refresh the INBOX on the refresh_every_seconds tick (10s by default).
@@ -546,7 +524,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   function copyCode() {
     const rows = copyRows();
     if (!rows.length) return;
-    if (!codesOn()) {
+    if (!codesEnabled(cfg)) {
       setStatus("login codes off — set login_codes: true in config.yaml");
       return;
     }

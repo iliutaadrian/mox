@@ -34,6 +34,7 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► OpenTUI/Solid TUI
 | `text.ts`      | Width-safe text fitting (string-width), emoji presentation normalization.                   |
 | `clipboard.ts` | System clipboard write via the first available platform tool (`pbcopy`/`wl-copy`/`xclip`/`xsel`). |
 | `codes.ts`     | One-time login code detection: gate phrases/words from config near a standalone 4-8 digit number. Pure. |
+| `autocopy.ts`  | The auto-copy step: scan what a sync just inserted, copy one code, announce it. Shared by the TUI and `--code-demo`. |
 | `notify.ts`    | Desktop notification: OSC 777 to the terminal, `terminal-notifier`, then `osascript`/`notify-send`. Fire-and-forget. |
 
 ---
@@ -110,6 +111,7 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
   - `create_draft` also takes `attachments`, a list of absolute (or `~/`) paths. `backend.readAttachments` reads the bytes and guesses the content type from the extension, before any IMAP call — a path must resolve (symlinks included) under the home or temp directory, must not contain a hidden dotfile segment, and must be at most 20 MB, with the attachments of one draft capped at 25 MB in total; `compose.buildDraftMime` then wraps the multipart/alternative body in a multipart/mixed envelope, one part per file.
 - `mox --prefill` — whole-inbox metadata sweep + full bodies for the offline categories. The heavy seed.
 - `mox --notify-test` — fire a sample banner and report which delivery paths were tried.
+- `mox --code-demo` — inject a synthetic ANAF-style code mail, run the real arrival path through `autocopy.copyArrivedCode` (the same function the TUI's sync calls), print what was detected/copied/notified, then delete that one row by id in a `finally`. The generated code is random, and only the injected row is removed — never "everything since the marker", which on a live store can mean somebody's real mail.
 - `mox --reclassify` / `mox --stats` — re-file against current rules, or print a store snapshot. No network for either.
 - There is no separate CLI entry point. `r` in the TUI covers routine syncing (INBOX + Sent).
 

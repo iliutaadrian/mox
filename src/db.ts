@@ -430,6 +430,14 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     ).all(id, limit) as { id: number; from_addr: string; subject: string; body: string; html: string }[];
   }
 
+  /** Row id for one (account, mailbox, uid), or 0 when it is not held. Lets a
+   * caller that inserted a row address exactly that row again — never "whatever
+   * arrived after me", which on a live store can mean somebody's real mail. */
+  messageIdOf(account: string, mailbox: string, uid: number): number {
+    const row = this.db.query("SELECT id FROM messages WHERE account=? AND mailbox=? AND uid=?").get(account, mailbox, uid) as { id: number } | null;
+    return row?.id ?? 0;
+  }
+
   storedUIDs(account: string, mailbox: string): Set<number> {
     const rows = this.db.query("SELECT uid FROM messages WHERE account=? AND mailbox=?").all(account, mailbox) as { uid: number }[];
     return new Set(rows.map((r) => r.uid));
