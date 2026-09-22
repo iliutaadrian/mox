@@ -181,3 +181,35 @@ describe("attachments", () => {
     expect(rows.find((r) => r.subject === "Subject 2")!.has_att).toBe(0);
   });
 });
+
+describe("arrival window", () => {
+  // The login-code auto-copy scans exactly what one sync inserted. Re-yielding
+  // a message already held must not put it back in the window — otherwise a
+  // code could land on the clipboard a second time, over something copied since.
+  test("only rows inserted after the marker are returned", () => {
+    store.insertMessage(msg({ uid: 1, subject: "old" }));
+    const marker = store.maxMessageId();
+    store.insertMessage(msg({ uid: 2, subject: "new" }));
+    expect(store.arrivedAfter(marker).map((m) => m.subject)).toEqual(["new"]);
+  });
+
+  test("a re-inserted message is not a new arrival", () => {
+    store.insertMessage(msg({ uid: 1, subject: "code mail" }));
+    const marker = store.maxMessageId();
+    expect(store.insertMessage(msg({ uid: 1, subject: "code mail" }))).toBe(false);
+    expect(store.arrivedAfter(marker)).toEqual([]);
+  });
+
+  test("newest mail comes first and folders stay out of it", () => {
+    const marker = store.maxMessageId();
+    store.insertMessage(msg({ uid: 5, subject: "older", date: 100 }));
+    store.insertMessage(msg({ uid: 6, subject: "newer", date: 200 }));
+    store.insertMessage(msg({ uid: 7, subject: "trashed", date: 300, mailbox: CLASS_TRASH }));
+    expect(store.arrivedAfter(marker).map((m) => m.subject)).toEqual(["newer", "older"]);
+  });
+
+  test("an empty table has no marker and no arrivals", () => {
+    expect(store.maxMessageId()).toBe(0);
+    expect(store.arrivedAfter(0)).toEqual([]);
+  });
+});

@@ -412,6 +412,24 @@ CREATE TABLE IF NOT EXISTS approved_categories (
     return (this.db.query("SELECT COUNT(*) AS n FROM messages WHERE account=? AND mailbox=?").get(account, mailbox) as any).n;
   }
 
+  /** Highest row id in the table — paired with arrivedAfter() to name exactly
+   * the mail one sync brought in. Row ids are assigned on INSERT, so this is a
+   * sync-independent marker: a re-fetch of a message already held inserts
+   * nothing (ON CONFLICT DO NOTHING) and cannot re-enter the window. */
+  maxMessageId(): number {
+    return (this.db.query("SELECT COALESCE(MAX(id), 0) AS n FROM messages").get() as any).n;
+  }
+
+  /** INBOX mail inserted after `id`, newest first — the login-code scan looks
+   * only at what just landed. */
+  arrivedAfter(id: number, limit = 50): { id: number; from_addr: string; subject: string; body: string; html: string }[] {
+    return this.db.query(
+      `SELECT id, COALESCE(from_addr,'') AS from_addr, COALESCE(subject,'') AS subject,
+       COALESCE(body,'') AS body, COALESCE(html,'') AS html
+       FROM messages WHERE id > ? AND mailbox='INBOX' ORDER BY date DESC LIMIT ?`,
+    ).all(id, limit) as { id: number; from_addr: string; subject: string; body: string; html: string }[];
+  }
+
   storedUIDs(account: string, mailbox: string): Set<number> {
     const rows = this.db.query("SELECT uid FROM messages WHERE account=? AND mailbox=?").all(account, mailbox) as { uid: number }[];
     return new Set(rows.map((r) => r.uid));

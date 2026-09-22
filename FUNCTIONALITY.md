@@ -33,6 +33,9 @@ IMAP (imapflow) ──► SQLite (bun:sqlite) ──► OpenTUI/Solid TUI
 | `links.ts`     | Numbered-link extraction from lynx output (and bare URLs in plain text) for the link picker. |
 | `text.ts`      | Width-safe text fitting (string-width), emoji presentation normalization.                   |
 | `clipboard.ts` | System clipboard write via the first available platform tool (`pbcopy`/`wl-copy`/`xclip`/`xsel`). |
+| `codes.ts`     | One-time login code detection: gate phrases/words from config near a standalone 4-8 digit number. Pure. |
+| `autocopy.ts`  | The auto-copy step: scan what a sync just inserted, copy one code, announce it.              |
+| `notify.ts`    | Desktop notification: OSC 777 to the terminal, `terminal-notifier`, then `osascript`/`notify-send`. Fire-and-forget. |
 
 ---
 
@@ -89,11 +92,20 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 - **`i`** — preview in `bat` (paged, themed; lynx-renders HTML first; handles alt-screen handoff + repaint).
 - **`u`** — urlview-style URL picker: extract+dedup URLs from html+body (max 50), pick → `open` in browser.
 
-### 7. Server writes (minimal)
+### 7. Login codes (`codes.ts`, `login_codes` in config)
+
+- A message qualifies when a gate word sits within ~120 characters of a standalone 4-8 digit number; the nearest number wins. URLs and HTML tags are excluded; a year counts only right beside the gate word (`your code is 2024`), never at prose distance (`learn to code in 2024`).
+- Two lists: `login_codes_words` are phrases matched in subject **and** body; `login_codes_subject_words` are bare words matched in the **subject only** (short and rarely numeric there, and the only way to catch `"479982 is your Facebook code"`). Measured over the local corpus: 45 hits across 31.5k messages, all genuine.
+- `login_codes` is the master switch (off unless literally `true`). `login_codes_auto_copy` copies a code the moment the mail lands, **TUI only** — never `--headless` (nobody at the keyboard) and never `--prefill`, and never on the first cold fill of a database (the whole backlog would qualify). One copy per sync, newest arrival wins, scanned over rows that sync actually inserted, so a code can never re-copy over something copied since.
+- `login_codes_notify` announces an auto-copy with a desktop banner carrying the code and sender — the status line is out of sight when this fires, since you are in a browser. Delivery is tried three ways (`notify.ts`): OSC 777 to the terminal (tmux-wrapped; terminals commonly suppress it while focused), `terminal-notifier` when installed, then `osascript`/`notify-send` — which exits 0 even when macOS silently drops the banner, so its success proves nothing.
+- Both lists live in `config.yaml`, not in the source: the languages and services mox knows about are a file anyone can extend.
+- `yc` copies by hand from the selected message(s); it never notifies. Mail past `content_days` keeps no body, so `yc` falls back to the subject and says so.
+
+### 8. Server writes (minimal)
 
 - **`M`/`U`** — mark read/unread: writes `\Seen` to the server (grouped by account+folder), mirrors locally. **Only server-mutating op.**
 
-### 8. Headless surface (`mcp.ts`, `index.tsx` flags)
+### 9. Headless surface (`mcp.ts`, `index.tsx` flags)
 
 - `mox mcp` — MCP server on stdio: `get_inbox`, `search_emails`, `get_email`, `triage_emails`, `set_category`, `create_draft`, `download_attachments`.
   - `create_draft` also takes `attachments`, a list of absolute (or `~/`) paths. `backend.readAttachments` reads the bytes and guesses the content type from the extension, before any IMAP call — a path must resolve (symlinks included) under the home or temp directory, must not contain a hidden dotfile segment, and must be at most 20 MB, with the attachments of one draft capped at 25 MB in total; `compose.buildDraftMime` then wraps the multipart/alternative body in a multipart/mixed envelope, one part per file.
@@ -123,7 +135,7 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 | `M`/`U`           | mark read/unread            | mark read/unread |
 | `v`               | open HTML in browser        | HTML in browser  |
 | `o`               | —                           | numbered-link picker |
-| `y`               | copy field (i/f/s/a)        | copy mode (char cursor, v select, y line, i/f/s/a) |
+| `y`               | copy field (i/f/s/c/a)      | copy mode (char cursor, v select, y line, i/f/s/c/a) |
 | `q`               | quit                        | back to list     |
 
 ---

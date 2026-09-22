@@ -39,6 +39,11 @@ export type Config = {
   headlessEverySeconds: number; // seconds between syncs in headless mode
   refreshEverySeconds: number; // seconds between the TUI's background inbox syncs
   dataDir: string; // where the database + Attachments/ live; "" = the built-in default
+  loginCodes: boolean; // master switch for one-time login codes (auto-copy + the `yc` key)
+  loginCodesAutoCopy: boolean; // copy a code to the clipboard as soon as the mail arrives (TUI only)
+  loginCodesNotify: boolean; // announce an auto-copied code with a desktop notification
+  loginCodesWords: string[]; // gate phrases, matched in subject and body
+  loginCodesSubjectWords: string[]; // bare gate words, matched in the subject only
 };
 
 // A positive number from config, falling back to `def` for missing/garbage/<=0
@@ -46,6 +51,12 @@ export type Config = {
 function positive(v: unknown, def: number): number {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : def;
+}
+
+// Gate words, lowercased and trimmed: they are matched case-insensitively, and
+// a stray blank entry would otherwise match everywhere.
+function words(v: unknown): string[] {
+  return (Array.isArray(v) ? v : []).map((w) => String(w).trim().toLowerCase()).filter(Boolean);
 }
 
 /** expandPath turns a user-written path into an absolute one: `~` is the home
@@ -96,6 +107,15 @@ export function loadConfig(path: string): Config {
     headlessEverySeconds: Math.floor(positive(raw.headless_every_seconds, 60)),
     refreshEverySeconds: Math.floor(positive(raw.refresh_every_seconds, 10)),
     dataDir: expandPath(raw.data_dir),
+    // Off unless asked for: this writes to the system clipboard on its own, so a
+    // config that never mentions it must never have it fire. The sub-switches
+    // are on unless explicitly disabled, and mean nothing while the master is
+    // off — same shape as headless / headless_every_seconds.
+    loginCodes: raw.login_codes === true,
+    loginCodesAutoCopy: raw.login_codes_auto_copy !== false,
+    loginCodesNotify: raw.login_codes_notify !== false,
+    loginCodesWords: words(raw.login_codes_words),
+    loginCodesSubjectWords: words(raw.login_codes_subject_words),
   };
 }
 

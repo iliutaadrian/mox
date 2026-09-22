@@ -45,6 +45,7 @@ Three honest reasons:
 | 🔒 **Local by construction** | Categories and the local-only **done** state live only in your SQLite DB. mox never writes labels/folders to the server. Delete `~/Documents/mox` and it never happened. |
 | 💾 **Backed up on a schedule** | Because that database is the only copy of your categories and done state, mox snapshots it to `backup/` every 12 hours (configurable, keeps the last 2) using SQLite's `VACUUM INTO`. |
 | 🧹 **One-key triage** | `e` done · `a` archive · `t` trash — each with an inverse (`z`). Multi-select with `space`, then act on the whole batch. Read/unread (`M`/`U`) sync to the server; done is local. |
+| 🔑 **Login codes on arrival** | A 2FA mail lands and its code is already on your clipboard, with a desktop banner naming the sender - you switch to the browser and paste. Detection is a word list in the config (phrases anywhere, bare words in the subject), so it works in your languages, not just English. `yc` grabs a code by hand; `login_codes_auto_copy: false` keeps it manual. |
 | 🔀 **Type-to-filter move** | `m` opens a fuzzy picker over every category — type a few letters, `enter`, done. Same picker powers `g` **goto** for jumping between views. |
 | 🔎 **Live search** | `/` filters the current view as you type, with operators (`from:`, `subject:`, `is:unread`). `n`/`p` jump between unread. |
 | 📎 **Attachments on demand** | Bodies are cached locally (retention is configurable); attachment *files* are fetched only when you press `s` — saved under `Attachments/` next to the database (single file, or a per-email subfolder). |
@@ -147,7 +148,7 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | `a` / `t` | **Archive** / **Trash** on the server |
 | `z` | **Restore** — undone / unarchive / untrash |
 | `m` | Move the selection to a category |
-| `y` | **Copy** — then `i` id, `f` sender address, `s` subject, `a` row (works on the whole multi-selection) |
+| `y` | **Copy** — then `i` id, `f` sender address, `s` subject, `c` login code, `a` row (works on the whole multi-selection) |
 | `g` | **Goto** — jump to any view |
 | `M` / `U` | Mark read / unread **on the server** |
 | `n` / `p` | Next / previous unread |
@@ -165,7 +166,7 @@ A category without a `match` is a manual-only bucket (the `m` picker still moves
 | `h` / `l` | Previous / next email |
 | `v` | Open the full HTML email in the browser |
 | `o` | Open a link: filterable picker over the `[N]` references in the body |
-| `y` | **Copy mode** — `h`/`j`/`k`/`l` move a character cursor (`0`/`$` line ends, `g`/`G` email ends), `y` copies the cursor's line, `v` starts a selection that `y` then copies; or `i` id, `f` sender, `s` subject, `a` the whole email |
+| `y` | **Copy mode** — `h`/`j`/`k`/`l` move a character cursor (`0`/`$` line ends, `g`/`G` email ends), `y` copies the cursor's line, `v` starts a selection that `y` then copies; or `i` id, `f` sender, `s` subject, `c` login code, `a` the whole email |
 | drag | Select text with the mouse — releasing copies the selection |
 | `s` | Download attachments to `Attachments/` next to the database (subfolder if multiple) |
 | `e`/`a`/`t` | Done / archive / trash |
