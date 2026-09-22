@@ -127,11 +127,17 @@ describe("findLoginCode — token shape", () => {
     expect(find("Your code", "reference 111111, your code is 222222")?.code).toBe("222222");
   });
 
-  test("a bare year is never a candidate", () => {
+  test("a year at prose distance is not a candidate", () => {
     // "How I would learn to code in 2024" — a newsletter subject, measured as a
-    // real false positive before years were excluded.
+    // real false positive before years were held to a tighter distance.
     expect(find("How I would learn to code in 2024 (if I could start over)")).toBeNull();
-    expect(find("Your code", "your code arrives in 2025")).toBeNull();
+    expect(find("Your code", "your code will arrive some time in 2025")).toBeNull();
+  });
+
+  test("but a year-shaped code right beside the gate word still counts", () => {
+    // Four-digit codes exist, and one of them eventually reads as a year.
+    expect(find("Your code", "Your code is 2024")?.code).toBe("2024");
+    expect(find("Cod de siguranta: 1999")?.code).toBe("1999");
   });
 
   test("HTML tags are stripped before scanning", () => {

@@ -60,27 +60,29 @@ backup_keep: 2
 
 # One-time login codes (2FA/OTP). A message qualifies when a gate word below
 # sits within ~120 characters of a standalone 4-8 digit number; the number
-# nearest a gate word wins. URLs, HTML tags and bare years are ignored, and the
-# subject is checked before the body.
+# nearest a gate word wins. URLs and HTML tags are ignored, and a year only
+# counts right beside a gate word ("your code is 2024"), never in prose.
+#
+# auto_copy: a qualifying arrival is copied to the clipboard the moment it lands
+#   and `notify` announces it with a desktop banner naming the sender — you
+#   switch to the browser and paste. Interface only: never in --headless (nobody
+#   is at the keyboard), never in --prefill, and never on the first cold fill of
+#   a new database (the whole 2FA backlog would qualify). One copy per sync,
+#   newest arrival wins. With auto_copy off, `yc` still works by hand.
+#
+# The two lists are what makes this work in your languages and for your
+# services — add to them whenever a sender is missed:
 #
 # words: phrases, matched in the subject AND the body. Phrases, not single
-#   words, because a body is long: over a real mailbox, bare words turn ordinary
-#   mail into hits (a fiscal code beside "cod", a year beside "verificare").
-# subject_words: single words, matched in the SUBJECT only — short and rarely
-#   numeric, so a bare word is safe there, and it is the only thing that catches
-#   subjects like "479982 is your Facebook code". Keep airport/bank collisions
-#   out of this list ("otp" is also Bucharest's airport and a bank).
+#   words, because a body is long: over a real 31k-message mailbox, bare words
+#   there turn ordinary mail into hits (a fiscal code beside "cod", a year
+#   beside "verificare").
+# subject_words: single words, matched in the SUBJECT only — subjects are short
+#   and rarely numeric, so a bare word is safe, and it is the only thing that
+#   catches subjects like "479982 is your Facebook code". Keep collisions out of
+#   this list ("otp" is also Bucharest's airport and a bank).
 #
-# auto_copy: new mail that qualifies is copied to the clipboard the moment it
-#   arrives — in the TUI only, never in --headless or --prefill. One copy per
-#   sync, newest arrival wins. Off = `yc` still works, nothing happens on its own.
-# notify: announce an auto-copied code with a desktop notification showing the
-#   code and the sender (the status line is out of sight when this fires, since
-#   you are in a browser). No effect when auto_copy is off; pressing `yc`
-#   yourself never notifies.
-#
-# Delete this block, or empty `words`, to switch the whole feature off. Editing
-# `words` replaces the list wholesale; there is no built-in set behind it.
+# Empty BOTH lists (or delete the block) to switch the whole feature off.
 login_codes:
   auto_copy: true
   notify: true

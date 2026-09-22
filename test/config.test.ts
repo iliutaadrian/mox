@@ -142,9 +142,19 @@ describe("login_codes", () => {
     expect(cfg.loginCodeNotify).toBe(false);
   });
 
+  // The lists are config, not constants in codes.ts: anyone can add a word for
+  // a service or a language mox has never seen without touching the source.
+  test("both lists reach the detector from config alone", () => {
+    const cfg = loadConfig(write("login_codes:\n  words: [mot de passe]\n  subject_words: [kod]\n"));
+    expect(cfg.loginCodeWords).toEqual(["mot de passe"]);
+    expect(cfg.loginCodeSubjectWords).toEqual(["kod"]);
+  });
+
   test("the shipped example config parses with the feature on", () => {
     const cfg = loadConfig("config.example.yaml");
     expect(cfg.loginCodeWords.length).toBeGreaterThan(10);
+    expect(cfg.loginCodeSubjectWords.length).toBeGreaterThan(0);
     expect(cfg.loginCodeAutoCopy).toBe(true);
+    expect(cfg.loginCodeNotify).toBe(true);
   });
 });

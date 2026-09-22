@@ -1,5 +1,5 @@
-// One-time login code detection. A message qualifies when a configured gate
-// word sits near a standalone 4-8 digit number; the candidate nearest a gate
+// One-time login code detection. A message qualifies when a gate word below
+// sits near a standalone 4-8 digit number; the candidate nearest a gate
 // word wins. The output goes straight to the system clipboard, so the rule is
 // deliberately narrow — a wrong pick is a wrong number pasted into a login
 // form, which is worse than no pick at all.
@@ -13,18 +13,19 @@
 //   - URLs are dropped before scanning: tracking links are full of digit runs.
 //   - digits only. Every sender in the corpus is numeric, and admitting
 //     alphanumeric tokens would swallow ticket ids, shas and coupon codes.
-//   - years are never candidates: "learn to code in 2024" and every calendar
-//     invite otherwise reads as a hit.
+//   - a year only counts when it is right up against the gate word, so
+//     "learn to code in 2024" is not a hit but "your code is 2024" still is.
 //
 // Two word lists, because the two places a code can sit have opposite risks.
-// `words` are phrases ("verification code", "cod de siguranta") and apply
-// everywhere: measured over the local corpus, bare words in a body turn
-// ordinary Romanian business mail into hits (a fiscal code next to "cod", a
-// year next to "verificare") — 112 hits per 933 bodied messages, against 26 for
-// phrases. `subjectWords` are bare words and apply to the subject only, where
-// the same measurement costs almost nothing (24 hits per 31k subjects) and is
-// the only thing that catches "479982 is your Facebook code", which no phrase
-// list can enumerate.
+// `words` are phrases and apply everywhere: measured over a real 31k-message
+// mailbox, bare words in a body turn ordinary Romanian business mail into hits
+// (a fiscal code next to "cod", a year next to "verificare") — 112 hits per 933
+// bodied messages, against 26 for phrases. `subject_words` are bare and apply to
+// the subject only, where the same measurement costs almost nothing (24 hits
+// per 31k subjects) and is the only thing that catches "479982 is your Facebook
+// code", which no phrase list can enumerate. Together: 45 hits over 31,557
+// messages, every one a genuine code mail.
+
 export type LoginCode = {
   code: string;
   word: string; // the gate word that claimed it — shown when explaining a hit
@@ -55,8 +56,11 @@ function wordSpans(haystack: string, words: string[]): { span: Span; word: strin
     if (!needle) continue;
     // Gate words must stand alone: "cod" must not fire inside "codrul", and
     // "pin" must not fire inside "shipping". Escaped because a word may carry
-    // punctuation or spaces ("one-time", "sign in").
-    const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "gu");
+    // punctuation or spaces ("one-time", "sign in"). Case-folded by the `i`
+    // flag rather than by lowercasing the text: toLowerCase() can change a
+    // string's length ("İ" becomes two characters), which would shift every
+    // span away from the text the numbers are matched in.
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "giu");
     for (const m of haystack.matchAll(pattern)) found.push({ span: { start: m.index, end: m.index + m[0].length }, word: needle });
   }
   return found;
@@ -68,23 +72,29 @@ function gap(a: Span, b: Span): number {
 }
 
 // A bare year is the single most common code-shaped number in ordinary mail
-// (dates, invites, newsletters), and no service issues one as a code.
+// (dates, invites, newsletters). Rejecting every 1900-2099 candidate outright
+// would also drop a genuine four-digit code that happens to read as a year, so
+// a year has to earn its place instead: it counts only when it sits right up
+// against the gate word ("code: 2024"), never at prose distance ("learn to code
+// in 2024", the measured false positive).
+const YEAR_MAX_GAP = 3;
+
 function isYear(s: string): boolean {
   return s.length === 4 && Number(s) >= 1900 && Number(s) <= 2099;
 }
 
 function scan(text: string, words: string[]): { code: string; word: string } | null {
   const clean = blank(blank(text, TAG), URL);
-  const gates = wordSpans(clean.toLowerCase(), words);
+  const gates = wordSpans(clean, words);
   if (!gates.length) return null;
 
   let best: { code: string; word: string; distance: number } | null = null;
   for (const m of clean.matchAll(CODE)) {
-    if (isYear(m[0])) continue;
     const span = { start: m.index, end: m.index + m[0].length };
+    const limit = isYear(m[0]) ? YEAR_MAX_GAP : MAX_GAP;
     for (const gate of gates) {
       const distance = gap(span, gate.span);
-      if (distance > MAX_GAP) continue;
+      if (distance > limit) continue;
       // Strictly nearer wins, so an equal-distance later candidate never
       // displaces the earlier one.
       if (!best || distance < best.distance) best = { code: m[0], word: gate.word, distance };
@@ -94,10 +104,11 @@ function scan(text: string, words: string[]): { code: string; word: string } | n
 }
 
 /** findLoginCode returns the one-time code a message carries, or null when no
- * gate word fires or no number sits close enough to one. The lists come from
- * config (`login_codes.words` / `login_codes.subject_words`); both empty
- * disables detection. The subject is scanned first — it is the
- * highest-confidence place a code can sit, and it survives body pruning. */
+ * gate word fires or no number sits close enough to one. Both lists come from
+ * config (`login_codes.words` / `login_codes.subject_words`) so the languages
+ * and services mox knows about are a file anyone can edit, not a constant in
+ * this module; both empty disables detection. The subject is scanned first — it
+ * is the highest-confidence place a code can sit, and it survives body pruning. */
 export function findLoginCode(subject: string, body: string, words: string[], subjectWords: string[] = []): LoginCode | null {
   if (!words.length && !subjectWords.length) return null;
   const fromSubject = scan(subject, [...words, ...subjectWords]);

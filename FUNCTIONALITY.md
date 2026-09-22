@@ -93,10 +93,11 @@ Space-separated AND-ed terms, quoted phrases, field operators (`db.ts` `buildSea
 
 ### 7. Login codes (`codes.ts`, `login_codes` in config)
 
-- A message qualifies when a gate word sits within ~120 characters of a standalone 4-8 digit number; the nearest number wins. URLs, HTML tags and bare years are excluded.
+- A message qualifies when a gate word sits within ~120 characters of a standalone 4-8 digit number; the nearest number wins. URLs and HTML tags are excluded; a year counts only right beside the gate word (`your code is 2024`), never at prose distance (`learn to code in 2024`).
 - Two lists: `words` are phrases matched in subject **and** body; `subject_words` are bare words matched in the **subject only** (short and rarely numeric there, and the only way to catch `"479982 is your Facebook code"`). Measured over the local corpus: 45 hits across 31.5k messages, all genuine.
-- `auto_copy` copies a code the moment the mail lands, **TUI only** — never `--headless` (nobody at the keyboard) and never `--prefill` (a backfill of years-old mail). One copy per sync, newest arrival wins, scanned over rows that sync actually inserted, so a code can never re-copy over something copied since.
+- `auto_copy` copies a code the moment the mail lands, **TUI only** — never `--headless` (nobody at the keyboard) and never `--prefill`, and never on the first cold fill of a database (the whole backlog would qualify). One copy per sync, newest arrival wins, scanned over rows that sync actually inserted, so a code can never re-copy over something copied since.
 - `notify` announces an auto-copy with a desktop banner carrying the code and sender — the status line is out of sight when this fires, since you are in a browser.
+- Both lists live in `config.yaml`, not in the source: the languages and services mox knows about are a file anyone can extend.
 - `yc` copies by hand from the selected message(s); it never notifies. Mail past `content_days` keeps no body, so `yc` falls back to the subject and says so.
 
 ### 8. Server writes (minimal)

@@ -135,7 +135,7 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   const store = new Store(props.dbPath);
   const cfg: Config = loadConfig(props.cfgPath);
   const be = backend(store, cfg);
-  // Detection is off entirely when config declares no gate words at all.
+  // Off entirely when config declares no gate words in either list.
   const codesOn = () => cfg.loginCodeWords.length > 0 || cfg.loginCodeSubjectWords.length > 0;
 
   const [version, setVersion] = createSignal(0); // bump after writes to re-query
@@ -220,11 +220,17 @@ export function App(props: { dbPath: string; cfgPath: string }) {
   // backend with nobody at the keyboard, and auto-copy is only meaningful when
   // a human is sitting in the TUI. A copy takes over the result line, since it
   // is the more useful thing to say about that sync.
-  async function syncMail() {
+  // `copied` is returned beside the backend result, never folded into it:
+  // `result.out` is a machine string the refresh tick parses for counts, and a
+  // sentence about a code would be read as "nothing arrived" whenever the code
+  // has no non-zero digit.
+  async function syncMail(): Promise<{ result: { ok: boolean; out: string }; copied: string }> {
     const before = store.maxMessageId();
-    const r = await be.sync();
-    const copied = r.ok ? autoCopyCode(before) : "";
-    return copied ? { ok: true, out: copied } : r;
+    const result = await be.sync();
+    // A cold store fills in one sweep, so everything in it is "new" — including
+    // 2FA mail from months ago. Nothing is copied off that first fill.
+    const copied = result.ok && before > 0 ? autoCopyCode(before) : "";
+    return { result, copied };
   }
 
   // One copy per sync, newest qualifying arrival wins. Scanning only rows
@@ -257,13 +263,14 @@ export function App(props: { dbPath: string; cfgPath: string }) {
       if (inFlight || busy() || typing() || picker() !== null || linkPicker() !== null || copy() !== null) return;
       inFlight = true;
       try {
-        const r = await syncMail();
-        if (r.ok) setLastSync(Date.now());
+        const { result, copied } = await syncMail();
+        if (result.ok) setLastSync(Date.now());
         // out looks like "fetched N, filed M by rules" — only redraw on change.
-        const nums = r.out.match(/\d+/g)?.map(Number) ?? [];
-        if (r.ok && nums.some((n) => n > 0)) {
+        const nums = result.out.match(/\d+/g)?.map(Number) ?? [];
+        if (result.ok && (copied || nums.some((n) => n > 0))) {
           setVersion((v) => v + 1);
-          setStatus(r.out);
+          // A copied code is the more useful thing to say about that sync.
+          setStatus(copied || result.out);
         }
       } catch {
         /* transient IMAP error — next tick retries */
@@ -845,9 +852,9 @@ export function App(props: { dbPath: string; cfgPath: string }) {
     } else if (name === "escape") setSelected(new Set<number>());
     else if (ch === "r")
       void doBackend("Fetching new mail", async () => {
-        const r = await syncMail();
-        if (r.ok) setLastSync(Date.now());
-        return r;
+        const { result, copied } = await syncMail();
+        if (result.ok) setLastSync(Date.now());
+        return copied ? { ok: true, out: copied } : result;
       });
     else if (ch === "M") void doBackend("Marking read on server", () => be.mark(targets(), true));
     else if (ch === "U") void doBackend("Marking unread on server", () => be.mark(targets(), false));
